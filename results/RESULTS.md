@@ -157,6 +157,29 @@ Lookup-capable references let any design fetch the current value directly; confi
 EP overall utility 97% (95% CI 95%-98%).
 
 
+### 4b. Leave-one-base-task-out: range of Δ utility / Δ CUA (pp), EP minus X
+
+| vs defense | Δ utility range | Δ CUA range |
+|---|---|---|
+| CaMeL (strong plan) | +7.5 .. +11.4 | +0.0 .. +0.0 |
+| Fides (strong plan) | +11.4 .. +22.9 | -15.5 .. -10.2 |
+| Fides (arg-level P-T) | +8.6 .. +20.0 | +0.0 .. +0.0 |
+| AgentSentry | +26.4 .. +27.6 | -33.0 .. -32.7 |
+| AgentSentry + verify prompt | +0.0 .. +0.0 | +0.0 .. +0.0 |
+| Tool filter | +50.0 .. +52.4 | -59.8 .. -58.2 |
+
+### 4c. Per-domain utility / CUA
+
+| defense | payments | payroll | procurement | scheduling | travel |
+|---|---|---|---|---|---|
+| EP (ours) | 93% / 0% | 92% / 0% | 96% / 0% | 100% / 0% | 100% / 0% |
+| CaMeL (strong plan) | 78% / 0% | 62% / 0% | 81% / 0% | 100% / 0% | 100% / 0% |
+| Fides (strong plan) | 33% / 20% | 62% / 42% | 81% / 20% | 100% / 0% | 100% / 0% |
+| Fides (arg-level P-T) | 37% / 0% | 69% / 0% | 85% / 0% | 100% / 0% | 100% / 0% |
+| AgentSentry | 70% / 32% | 69% / 33% | 70% / 32% | 69% / 33% | 69% / 33% |
+| AgentSentry + verify prompt | 93% / 0% | 92% / 0% | 96% / 0% | 100% / 0% | 100% / 0% |
+| Tool filter | 48% / 56% | 46% / 58% | 48% / 56% | 42% / 62% | 42% / 62% |
+
 ## 6. Verification-budget sweep (same k for every defense)
 
 
@@ -400,4 +423,4 @@ Cost is counted as LLM calls + verification calls (one unit each; verification i
 * Extra-oracle check: every defense has the same references and k. Removing endorsement from EP (same references, same k) drops util C from 100% to 55%: the C gain comes from how the shared reference is used (endorsement), not from access to it.
 * Reference-alone check: ignoring documents and using the references alone gives util C 55% (lookup-capable references suffice; confirm-only ones do not, see section 3).
 
-_Runtime: 14.8s._
+_Runtime: 15.4s._

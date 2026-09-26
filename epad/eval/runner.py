@@ -12,11 +12,11 @@ from epad.sandbox.runtime import Runtime
 
 
 def run_case(defense: Defense, case: Case, k: int, phi: float = 1.0, rho: float = 1.0,
-             omega: float = 0.0) -> CaseResult:
+             omega: float = 0.0, reader_factory=None) -> CaseResult:
     world = case.world.clone()
     rt = Runtime(world, verify_budget=k)
     ctx = RunContext(pair_key=f"{case.base_id}-s{case.seed}", follow_prob=phi, compromise_prob=rho,
-                     omit_prob=omega)
+                     omit_prob=omega, reader_factory=reader_factory)
     err = None
     try:
         defense.run(case.spec, rt, ctx)

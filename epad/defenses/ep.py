@@ -30,7 +30,7 @@ from typing import Any, Optional
 from epad.defenses.base import (Defense, RunContext, commit_all, contested, planner_call, read_all,
                                 ref_info, retrieve, slot_rule, store_values, try_lookup, try_verify,
                                 verification_order)
-from epad.plan import Resolved, TaskSpec, instantiate
+from epad.plan import Resolved, TaskSpec, apply_transform, instantiate
 from epad.sandbox.runtime import Runtime
 from epad.sandbox.world import values_equal
 from epad.schema import (ActionRequest, Claim, FactKey, Policy, SlotKind, Verdict, VerifyRule)
@@ -126,10 +126,17 @@ class EvidencePreserving(Defense):
                     return f"R2: no basis for {s.name}"
                 if b.basis in ("evidence", "reference_lookup"):
                     ok = any(evid.get(i) and evid[i].verdict == Verdict.CONFIRMED and evid[i].key == s.fact
-                             and evid[i].reference == spec.reference_for(s.fact) for i in b.evidence_ids)
+                             and evid[i].reference == spec.reference_for(s.fact)
+                             and values_equal(apply_transform(s.transform, evid[i].value), v)
+                             for i in b.evidence_ids)
                     if not ok:
-                        return f"R2: evidence for {s.name} missing or not from the configured reference"
-                elif b.basis != "trusted_store":
+                        return f"R2: evidence for {s.name} missing, for another value, or not from the configured reference"
+                elif b.basis == "trusted_store":
+                    store = spec.store_for(s.fact)
+                    sv = rt.read_store(store, s.fact) if store else None
+                    if sv is None or not values_equal(apply_transform(s.transform, sv), v):
+                        return f"R2: {s.name} does not equal the trusted-store value"
+                else:
                     return f"R2: inadmissible basis {b.basis} for {s.name}"
         if act.tool == "send_payment" and float(act.args.get("amount", 0)) > self.policy.max_payment:
             return "policy: payment limit"

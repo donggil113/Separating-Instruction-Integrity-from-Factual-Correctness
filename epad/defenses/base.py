@@ -11,7 +11,7 @@ Fairness contract (enforced by construction, checked in tests):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from epad.plan import Resolved, TaskSpec, slot_for_fact
 from epad.sandbox.runtime import BudgetExhausted, Runtime
@@ -29,6 +29,7 @@ class RunContext:
     follow_prob: float = 1.0    # phi: actor compliance with instructions in untrusted content
     compromise_prob: float = 1.0  # rho: reader hijack when a reader payload is present
     omit_prob: float = 0.0      # omega: a fact is resolved WITHOUT the verification step (planner/resolver slip)
+    reader_factory: Optional[Callable[[], Any]] = None   # e.g. an LLM-backed reader (epad/llm_reader.py)
 
     def omits(self, key) -> bool:
         from epad.sim import draw
@@ -64,7 +65,8 @@ def store_values(spec: TaskSpec, rt: Runtime) -> dict[FactKey, Any]:
 
 def read_all(rt: Runtime, docs: list[Document], keys: list[FactKey], ctx: RunContext,
              imperative_as_fact: bool = True) -> tuple[list[Claim], list, bool]:
-    reader = ScriptedReader(ctx.pair_key, ctx.compromise_prob, imperative_as_fact)
+    reader = (ctx.reader_factory() if ctx.reader_factory is not None
+              else ScriptedReader(ctx.pair_key, ctx.compromise_prob, imperative_as_fact))
     claims, directives, compromised = [], [], False
     for d in docs:
         out: ReaderOutput = reader.read(rt, d, keys)

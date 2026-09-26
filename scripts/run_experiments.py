@@ -212,6 +212,30 @@ def main():
     ci_u = bootstrap_ci(ep_rs, lambda s: summarize(s)["util_all"])
     lines.append(f"\nEP overall utility {fmt(summ[OURS]['util_all'])} (95% CI {fmt(ci_u[0])}-{fmt(ci_u[1])}).\n")
 
+    # leave-one-base-task-out robustness of the headline paired differences
+    lines.append("\n### 4b. Leave-one-base-task-out: range of Δ utility / Δ CUA (pp), EP minus X\n")
+    rows = []
+    bases = sorted({r.base_id for r in main_rs})
+    for d in STRONG_EXISTING:
+        du, dc = [], []
+        for b in bases:
+            a = [r for r in main_rs if r.defense == OURS and r.base_id != b]
+            o = [r for r in main_rs if r.defense == d and r.base_id != b]
+            du.append(100 * paired_diff(a, o, "success", n_boot=10)[0])
+            dc.append(100 * paired_diff(a, o, "cua", n_boot=10, families={"A", "B", "C"})[0])
+        rows.append([d, f"{min(du):+.1f} .. {max(du):+.1f}", f"{min(dc):+.1f} .. {max(dc):+.1f}"])
+    lines.append(md_table(["vs defense", "Δ utility range", "Δ CUA range"], rows))
+
+    lines.append("\n### 4c. Per-domain utility / CUA\n")
+    rows = []
+    for d in [OURS] + STRONG_EXISTING:
+        cells = []
+        for dom in sorted({r.domain for r in main_rs}):
+            m = summarize([r for r in main_rs if r.defense == d and r.domain == dom])
+            cells.append(f"{fmt(m['util_all'])} / {fmt(m['cua_all'])}")
+        rows.append([d] + cells)
+    lines.append(md_table(["defense"] + sorted({r.domain for r in main_rs}), rows))
+
     sweeps = {}
     # ---------------------------------------------------------------- budget sweep
     verifying = ["CaMeL (strong plan)", "Fides (strong plan)", "Fides (arg-level P-T)", "AgentSentry + verify prompt",
