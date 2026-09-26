@@ -61,6 +61,7 @@ class VerifyRule(str, Enum):
 class Verdict(str, Enum):
     CONFIRMED = "confirmed"
     REFUTED = "refuted"
+    CLOSE_MATCH = "close_match"  # e.g. Confirmation-of-Payee: account exists under a similar but different name
     UNKNOWN = "unknown"  # reference does not cover this key
 
 
@@ -179,6 +180,7 @@ class ActionRequest:
     args: Mapping[str, Any]
     origin: str                          # component that proposed it (e.g. "plan", "directive:<id>")
     justification: tuple[BoundArg, ...] = field(default_factory=tuple)
+    template: Optional[int] = None       # index of the grant template it instantiates (None: not from the grant)
 
     def key(self) -> tuple:
         return (self.tool, tuple(sorted((k, _norm(v)) for k, v in self.args.items())))

@@ -5,8 +5,9 @@ Fairness contract (enforced by construction, checked in tests):
     output for the user request) and the same ``Runtime`` (same read tools,
     trusted stores, references and verification budget ``k``);
   * no defense receives the case variant, ground truth, or world object;
-  * defenses that verify use the same candidate ordering helper
-    (``verification_order``) so that no defense wins by a cleverer search.
+  * every defense whose plan verifies claims uses the same resolver
+    (``resolve``) under an explicit ``ResolvePolicy``, so that differences between
+    designs are differences in *rules* (what may be bound), not in search skill.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from epad.plan import Resolved, TaskSpec, slot_for_fact
 from epad.sandbox.runtime import BudgetExhausted, Runtime
 from epad.sandbox.world import Document, values_equal
 from epad.schema import Claim, Evidence, FactKey, SlotKind, SlotRole, Verdict, VerifyRule
-from epad.sim import ReaderOutput, ScriptedReader
+from epad.sim import ReaderOutput, ScriptedReader, draw
 
 PLANNER_SYSTEM_TOKENS = 900   # system prompt incl. tool signatures (same for all planners)
 ACTOR_SYSTEM_TOKENS = 700
@@ -27,12 +28,13 @@ ACTOR_SYSTEM_TOKENS = 700
 class RunContext:
     pair_key: str               # "<base>-s<seed>": identical across the paired variants
     follow_prob: float = 1.0    # phi: actor compliance with instructions in untrusted content
-    compromise_prob: float = 1.0  # rho: reader hijack when a reader payload is present
-    omit_prob: float = 0.0      # omega: a fact is resolved WITHOUT the verification step (planner/resolver slip)
+    compromise_prob: float = 1.0  # rho: reader/purifier hijack when a reader payload is present
+    omit_prob: float = 0.0      # omega: a fact is resolved WITHOUT the verification step (slip)
+    keep_imperative_facts: float = 1.0   # prob. a reader/purifier keeps a fact phrased as a request
+    directive_as_claim: float = 0.0      # prob. a reader/purifier turns a valued directive into a claim
     reader_factory: Optional[Callable[[], Any]] = None   # e.g. an LLM-backed reader (epad/llm_reader.py)
 
     def omits(self, key) -> bool:
-        from epad.sim import draw
         return self.omit_prob > 0 and draw(self.pair_key, str(key), "omit_verification") < self.omit_prob
 
 
@@ -45,7 +47,7 @@ class Defense:
         raise NotImplementedError
 
 
-# ------------------------------------------------------------------ helpers
+# ------------------------------------------------------------------ retrieval / extraction
 def retrieve(spec: TaskSpec, rt: Runtime) -> list[Document]:
     seen: dict[str, Document] = {}
     for step in spec.reads:
@@ -63,10 +65,15 @@ def store_values(spec: TaskSpec, rt: Runtime) -> dict[FactKey, Any]:
     return out
 
 
-def read_all(rt: Runtime, docs: list[Document], keys: list[FactKey], ctx: RunContext,
-             imperative_as_fact: bool = True) -> tuple[list[Claim], list, bool]:
-    reader = (ctx.reader_factory() if ctx.reader_factory is not None
-              else ScriptedReader(ctx.pair_key, ctx.compromise_prob, imperative_as_fact))
+def make_reader(ctx: RunContext):
+    if ctx.reader_factory is not None:
+        return ctx.reader_factory()
+    return ScriptedReader(ctx.pair_key, ctx.compromise_prob, ctx.keep_imperative_facts, ctx.directive_as_claim)
+
+
+def read_all(rt: Runtime, docs: list[Document], keys: list[FactKey], ctx: RunContext
+             ) -> tuple[list[Claim], list, bool]:
+    reader = make_reader(ctx)
     claims, directives, compromised = [], [], False
     for d in docs:
         out: ReaderOutput = reader.read(rt, d, keys)
@@ -93,16 +100,11 @@ def latest_claim(claims: list[Claim], key: FactKey) -> Optional[Claim]:
     return cs[-1] if cs else None
 
 
-def verification_order(claims: list[Claim], key: FactKey, store_val: Any) -> list[tuple[Any, list[Claim]]]:
-    """Common candidate order for every verifying defense: document values that
-    challenge the trusted store (newest first), then the trusted-store value."""
-    groups = [(v, cs) for v, cs in distinct_newest_first(claims, key)
-              if store_val is None or not values_equal(v, store_val)]
-    if store_val is not None:
-        groups.append((store_val, []))
-    return groups
+def contested(claims: list[Claim], key: FactKey, store_val: Any) -> bool:
+    return any(not values_equal(c.value, store_val) for c in claims if c.key == key)
 
 
+# ------------------------------------------------------------------ task metadata
 def slot_rule(spec: TaskSpec, key: FactKey) -> VerifyRule:
     rules = [s.verify for s in slot_for_fact(spec, key)]
     return VerifyRule.ALWAYS if (not rules or VerifyRule.ALWAYS in rules) else VerifyRule.IF_UNTRUSTED_OR_CONFLICT
@@ -141,10 +143,86 @@ def try_verify(rt: Runtime, ref: str, key: FactKey, value: Any, claim_ids=()) ->
         return None
 
 
-def contested(claims: list[Claim], key: FactKey, store_val: Any) -> bool:
-    return any(not values_equal(c.value, store_val) for c in claims if c.key == key)
+# ------------------------------------------------------------------ the shared resolver
+@dataclass(frozen=True)
+class ResolvePolicy:
+    """How a verifying design turns candidate values into a bound fact.
+
+    endorse        -- may a document value be bound when the reference CONFIRMS it?
+                      (False = provenance-only: only trusted-store values or lookups)
+    verify_store   -- "always": a trusted-store value is bound only when the reference confirms it
+                      (the store is the user's record: integrity trusted, freshness not);
+                      "if_contested": an uncontested store value binds unverified (pre-audit EP).
+    order          -- "store_first": verify the user's record first, then document challengers
+                      (newest first); "challengers_first": the reverse.
+    fallback_after_refute -- pre-audit bug kept for comparison: once every challenger is refuted,
+                      bind the (contested!) store value without verifying it.
+    lookup_first   -- use a lookup-capable reference before any shortcut.
+    require_unique -- verify every candidate and bind only if exactly one is CONFIRMED (for
+                      references whose CONFIRMED is not unique, e.g. name-match payee checks).
+    """
+    endorse: bool = True
+    verify_store: str = "always"
+    order: str = "store_first"
+    fallback_after_refute: bool = False
+    lookup_first: bool = True
+    require_unique: bool = False
 
 
+EP_POLICY = ResolvePolicy()
+EP_PRE_AUDIT = ResolvePolicy(verify_store="if_contested", order="challengers_first", fallback_after_refute=True,
+                             lookup_first=False)
+
+
+def resolve(spec: TaskSpec, rt: Runtime, key: FactKey, claims: list[Claim], store_val: Any,
+            pol: ResolvePolicy = EP_POLICY, omit: bool = False) -> Optional[Resolved]:
+    if omit:   # the verification step is skipped: newest claimed value (or the store) is used as-is
+        c = latest_claim(claims, key)
+        if c is not None:
+            return Resolved(c.value, "untrusted", claim_ids=(c.claim_id,))
+        return Resolved(store_val, "trusted_store") if store_val is not None else None
+    ref, lookup = ref_info(spec, rt, key)
+    rule = slot_rule(spec, key)
+    is_contested = store_val is not None and contested(claims, key, store_val)
+    store_needs_evidence = (pol.verify_store == "always" or is_contested or rule == VerifyRule.ALWAYS)
+    if store_val is not None and not store_needs_evidence and not (lookup and pol.lookup_first):
+        return Resolved(store_val, "trusted_store")
+    if ref is None:
+        return None
+    if lookup and (pol.lookup_first or store_val is None or store_needs_evidence):
+        return try_lookup(rt, ref, key)
+    challengers = [(v, cs) for v, cs in distinct_newest_first(claims, key)
+                   if store_val is None or not values_equal(v, store_val)]
+    if not pol.endorse:
+        challengers = []                    # an unbindable candidate is never worth a verification
+    store_cand = [(store_val, [])] if store_val is not None else []
+    cands = store_cand + challengers if pol.order == "store_first" else challengers + store_cand
+    confirmed: list[Resolved] = []
+    complete = True
+    for value, cs in cands:
+        is_store = store_val is not None and not cs and values_equal(value, store_val)
+        if is_store and pol.fallback_after_refute and pol.verify_store != "always" and rule != VerifyRule.ALWAYS:
+            # pre-audit behaviour: reaching the store in challengers-first order means every challenger was
+            # refuted; the contested store value was then bound WITHOUT evidence (RT-EP-1)
+            return Resolved(store_val, "trusted_store")
+        ev = try_verify(rt, ref, key, value, tuple(c.claim_id for c in cs))
+        if ev is None:                       # budget exhausted
+            complete = False
+            break
+        if ev.verdict == Verdict.UNKNOWN:
+            return None
+        if ev.verdict == Verdict.CONFIRMED:
+            r = Resolved(value, "trusted_store" if is_store else "evidence", (ev.evidence_id,),
+                         tuple(c.claim_id for c in cs))
+            if not pol.require_unique:
+                return r
+            confirmed.append(r)
+    if pol.require_unique and complete and len(confirmed) == 1:
+        return confirmed[0]
+    return None
+
+
+# ------------------------------------------------------------------ misc
 def planner_call(rt: Runtime, spec: TaskSpec, out_tokens: int = 250) -> None:
     rt.llm("planner", PLANNER_SYSTEM_TOKENS + len(spec.user_prompt) // 4, out_tokens)
 

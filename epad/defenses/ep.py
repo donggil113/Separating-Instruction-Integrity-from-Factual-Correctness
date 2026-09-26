@@ -2,85 +2,50 @@
 
 Pipeline:  user request --(trusted planner)--> AuthorityGrant
            untrusted docs --(quarantined reader, schema = grant's fact keys)--> Claims (+ Directives, audit only)
-           Claim --(independent reference, entity id taken from the grant)--> Evidence
-           Evidence-backed value --> FACT argument of an action the grant already permits
+           trusted user store --> one more *candidate* (the user's record; fresh or stale)
+           candidate --(independent reference, entity id from the grant)--> Evidence
+           Evidence-backed value --> FACT argument / condition of an action the grant already permits
            reference monitor re-checks every proposed action before commit.
 
-What is *not* new here (credited in docs/01_related_work.md): plan-from-trusted-
-query and quarantined extraction (Dual-LLM / CaMeL / Fides variable passing),
-provenance/taint labels (IFC), endorsement (IFC; Fides' capacity-based escape
-hatch), reference monitors. What EP fixes as a *rule*:
+Not new (credited in docs/01_related_work.md): plan-from-trusted-query and quarantined extraction
+(Dual-LLM / CaMeL / Fides variable passing), provenance/taint labels (IFC), endorsement (IFC; Fides'
+typed escape hatch), reference monitors, verify-before-pay (Confirmation-of-Payee / VoP practice).
+What EP fixes as *rules*:
 
-  R1  Authority only from the grant: documents cannot add tools, calls,
-      counterparties or user-fixed values; directives are recorded, never run.
-  R2  A FACT argument may be bound only to a value with an admissible basis:
-      (a) a CONFIRMED verdict from the reference configured for exactly that
-          (entity, attribute) key, where the entity comes from the grant, or a
-          lookup from that reference; or
-      (b) an uncontested trusted-store value, when the slot's rule allows it.
-      Provenance (authenticated sender) and content hashes are never a basis.
-  R3  If no admissible value exists within the verification budget, abstain
-      (escalate) for the affected action instead of guessing.
+  R1  Authority only from the grant: documents cannot add tools, calls, counterparties or user-fixed
+      values; directives are recorded, never run.
+  R2  Every FACT argument and every condition fact must be backed by a CONFIRMED verdict (or a lookup)
+      from the reference configured for exactly that (entity-from-grant, attribute) key, for exactly
+      that value. The user's own store is a candidate like any other: it is trusted not to be forged,
+      not to be current. Provenance (authenticated sender) and hashes are never evidence.
+  R3  If no admissible value exists within the verification budget, escalate instead of acting.
+
+``EvidencePreserving(policy=EP_PRE_AUDIT, strict=False)`` reproduces the version that the adversarial
+audit broke (uncontested store bound unverified; contested store bound after refuting challengers).
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Optional
 
-from epad.defenses.base import (Defense, RunContext, commit_all, contested, planner_call, read_all,
-                                ref_info, retrieve, slot_rule, store_values, try_lookup, try_verify,
-                                verification_order)
-from epad.plan import Resolved, TaskSpec, apply_transform, instantiate
+from epad.defenses.base import (EP_POLICY, EP_PRE_AUDIT, Defense, ResolvePolicy, RunContext, commit_all,
+                                planner_call, read_all, resolve, retrieve, store_values)
+from epad.plan import Resolved, TaskSpec, apply_transform, eval_condition, instantiate
 from epad.sandbox.runtime import Runtime
 from epad.sandbox.world import values_equal
-from epad.schema import (ActionRequest, Claim, FactKey, Policy, SlotKind, Verdict, VerifyRule)
-
-
-def resolve_with_evidence(spec: TaskSpec, rt: Runtime, key: FactKey, claims: list[Claim],
-                          store_val: Any, endorse: bool = True, omit: bool = False) -> Optional[Resolved]:
-    """Rule R2. ``endorse=False`` gives the provenance-only variant (no untrusted
-    value may be bound even when the reference confirms it). ``omit=True``
-    simulates a slip in which the verification step is skipped and the newest
-    claimed value is used as-is (sensitivity analysis, omega)."""
-    if omit:
-        cs = sorted([c for c in claims if c.key == key], key=lambda c: c.timestamp)
-        if cs:
-            return Resolved(cs[-1].value, "untrusted", claim_ids=(cs[-1].claim_id,))
-        return Resolved(store_val, "trusted_store") if store_val is not None else None
-    ref, lookup = ref_info(spec, rt, key)
-    rule = slot_rule(spec, key)
-    is_contested = contested(claims, key, store_val) if store_val is not None else True
-    if store_val is not None and not is_contested and rule == VerifyRule.IF_UNTRUSTED_OR_CONFLICT:
-        return Resolved(store_val, "trusted_store")
-    if ref is None:
-        return None
-    if lookup:
-        return try_lookup(rt, ref, key)
-    all_challengers_refuted = True
-    for value, cs in verification_order(claims, key, store_val):
-        is_store = store_val is not None and not cs and values_equal(value, store_val)
-        if not is_store and not endorse:
-            all_challengers_refuted = False       # provenance-only: an untrusted value can never be bound
-            continue
-        if is_store and all_challengers_refuted and rule == VerifyRule.IF_UNTRUSTED_OR_CONFLICT:
-            return Resolved(store_val, "trusted_store")   # every challenger was refuted by the reference
-        ev = try_verify(rt, ref, key, value, tuple(c.claim_id for c in cs))
-        if ev is None or ev.verdict == Verdict.UNKNOWN:   # budget exhausted / not covered
-            return None
-        if ev.verdict == Verdict.CONFIRMED:
-            basis = "evidence"
-            return Resolved(value, basis, (ev.evidence_id,), tuple(c.claim_id for c in cs))
-    return None
+from epad.schema import ActionRequest, FactKey, Policy, SlotKind, Verdict
 
 
 class EvidencePreserving(Defense):
     name = "EP (ours)"
     family = "ours"
-    description = "authority from grant only; claim -> independent verification -> FACT argument; abstain otherwise"
+    description = "authority from grant only; every fact value -> independent verification -> argument; else escalate"
 
-    def __init__(self, endorse: bool = True, policy: Policy = Policy(), name: Optional[str] = None):
-        self.endorse = endorse
+    def __init__(self, policy: ResolvePolicy = EP_POLICY, strict: bool = True, name: Optional[str] = None,
+                 deploy_policy: Policy = Policy()):
         self.policy = policy
+        self.strict = strict                 # monitor requires reference evidence for every FACT value
+        self.deploy_policy = deploy_policy
         if name:
             self.name = name
 
@@ -93,53 +58,74 @@ class EvidencePreserving(Defense):
             rt.note(f"directive ignored ({d.source}): {d.text[:80]}")
         stores = store_values(spec, rt)
         facts: dict[FactKey, Resolved] = {}
-        # resolve condition facts and slots in grant order; unchallenged trusted values cost nothing
         for key in keys:
-            r = resolve_with_evidence(spec, rt, key, claims, stores.get(key), endorse=self.endorse,
-                                      omit=ctx.omits(key))
+            r = resolve(spec, rt, key, claims, stores.get(key), self.policy, omit=ctx.omits(key))
             if r is not None:
                 facts[key] = r
+        refuted = [e for e in rt.log.verifications if e.verdict in (Verdict.REFUTED, Verdict.CLOSE_MATCH)
+                   and e.claim_id is not None]
+        for e in refuted:                            # surfaced: a document claim the reference contradicts
+            rt.note(f"refuted claim {e.claim_id}: {e.key[1]}={e.value} ({e.verdict.value})")
         actions, abstentions = instantiate(spec, facts, origin="grant")
         for tool, why in abstentions:
             rt.abstain(tool, why)
         commit_all(rt, actions, lambda a: self.monitor(spec, rt, a, facts), by="ep_monitor")
 
     # ---------------------------------------------------------- reference monitor
+    def _admissible(self, spec: TaskSpec, rt: Runtime, key: FactKey, r: Optional[Resolved],
+                    value, transform: Optional[str]) -> Optional[str]:
+        if r is None:
+            return f"R2: {key[1]} unresolved"
+        evid = {e.evidence_id: e for e in rt.log.verifications}
+        ok_ev = any(evid.get(i) and evid[i].verdict == Verdict.CONFIRMED and evid[i].key == key
+                    and evid[i].reference == spec.reference_for(key)
+                    and values_equal(apply_transform(transform, evid[i].value), value)
+                    for i in r.evidence_ids)
+        if ok_ev:
+            return None
+        if not self.strict and r.basis == "trusted_store":
+            store = spec.store_for(key)
+            sv = rt.read_store(store, key) if store else None
+            if sv is not None and values_equal(apply_transform(transform, sv), value):
+                return None
+        return f"R2: no reference evidence for {key[1]}={value} (basis {r.basis})"
+
     def monitor(self, spec: TaskSpec, rt: Runtime, act: ActionRequest, facts: dict) -> Optional[str]:
-        tpl = next((t for t in spec.grant.templates if t.tool == act.tool and all(
-            values_equal(act.args.get(s.name), s.value) for s in t.slots if s.kind == SlotKind.USER_FIXED)), None)
-        if tpl is None:
-            return "R1: action not permitted by the user's grant"
-        n_same = sum(1 for a in rt.log.committed if a.tool == act.tool)
+        if act.template is None or not (0 <= act.template < len(spec.grant.templates)):
+            return "R1: action not instantiated from the user's grant"
+        tpl = spec.grant.templates[act.template]
+        if tpl.tool != act.tool or not all(values_equal(act.args.get(s.name), s.value)
+                                           for s in tpl.slots if s.kind == SlotKind.USER_FIXED):
+            return "R1: action does not match its grant template"
+        n_same = sum(1 for a in rt.log.committed if a.template == act.template)
         if n_same >= tpl.max_calls:
             return "R1: call count exceeds grant"
-        evid = {e.evidence_id: e for e in rt.log.verifications}
+        if tpl.condition is not None:                # R2 for condition facts, re-evaluated here
+            cr = facts.get(tpl.condition.fact)
+            why = self._admissible(spec, rt, tpl.condition.fact, cr, cr.value if cr else None, None)
+            if why or eval_condition(tpl.condition, facts) is not True:
+                return why or "R2: grant condition not established"
         just = {b.slot: b for b in act.justification}
         for s in tpl.slots:
             v = act.args.get(s.name)
             if s.kind == SlotKind.FREE:
-                if s.free_pattern and not re.match(s.free_pattern, str(v)) or len(str(v)) > s.free_max_len:
+                if (s.free_pattern and not re.match(s.free_pattern, str(v))) or len(str(v)) > s.free_max_len:
                     return f"free arg {s.name} violates constraint"
             elif s.kind == SlotKind.FACT:
                 b = just.get(s.name)
-                if b is None:
+                r = facts.get(s.fact)
+                if b is None or r is None:
                     return f"R2: no basis for {s.name}"
-                if b.basis in ("evidence", "reference_lookup"):
-                    ok = any(evid.get(i) and evid[i].verdict == Verdict.CONFIRMED and evid[i].key == s.fact
-                             and evid[i].reference == spec.reference_for(s.fact)
-                             and values_equal(apply_transform(s.transform, evid[i].value), v)
-                             for i in b.evidence_ids)
-                    if not ok:
-                        return f"R2: evidence for {s.name} missing, for another value, or not from the configured reference"
-                elif b.basis == "trusted_store":
-                    store = spec.store_for(s.fact)
-                    sv = rt.read_store(store, s.fact) if store else None
-                    if sv is None or not values_equal(apply_transform(s.transform, sv), v):
-                        return f"R2: {s.name} does not equal the trusted-store value"
-                else:
-                    return f"R2: inadmissible basis {b.basis} for {s.name}"
-        if act.tool == "send_payment" and float(act.args.get("amount", 0)) > self.policy.max_payment:
+                why = self._admissible(spec, rt, s.fact, r, v, s.transform)
+                if why:
+                    return why
+        if act.tool == "send_payment" and float(act.args.get("amount", 0)) > self.deploy_policy.max_payment:
             return "policy: payment limit"
-        if any(isinstance(v, str) and m in v.upper() for v in act.args.values() for m in self.policy.sensitive_markers):
+        if any(isinstance(v, str) and m in v.upper() for v in act.args.values()
+               for m in self.deploy_policy.sensitive_markers):
             return "policy: sensitive data in arguments"
         return None
+
+
+def ep_pre_audit() -> EvidencePreserving:
+    return EvidencePreserving(EP_PRE_AUDIT, strict=False, name="EP v0 (pre-audit)")

@@ -76,6 +76,9 @@ class Reference:
     attributes: frozenset[str]
     supports_lookup: bool
     table: dict[FactKey, Any] = field(default_factory=dict)
+    close: dict[FactKey, list] = field(default_factory=dict)   # values registered to a look-alike name
+    also: dict[FactKey, list] = field(default_factory=dict)    # other values that ALSO match (non-unique checks,
+                                                               # e.g. a mule account opened under the exact name)
 
     def covers(self, key: FactKey) -> bool:
         return key[1] in self.attributes
@@ -83,7 +86,11 @@ class Reference:
     def confirm(self, key: FactKey, value: Any) -> Verdict:
         if not self.covers(key) or key not in self.table:
             return Verdict.UNKNOWN
-        return Verdict.CONFIRMED if _eq(self.table[key], value) else Verdict.REFUTED
+        if _eq(self.table[key], value) or any(_eq(v, value) for v in self.also.get(key, [])):
+            return Verdict.CONFIRMED
+        if any(_eq(v, value) for v in self.close.get(key, [])):
+            return Verdict.CLOSE_MATCH
+        return Verdict.REFUTED
 
     def lookup(self, key: FactKey) -> Optional[Any]:
         if not self.supports_lookup:
@@ -113,13 +120,15 @@ class World:
 
 
 def _eq(a: Any, b: Any) -> bool:
-    if isinstance(a, float) or isinstance(b, float):
-        try:
-            return abs(float(a) - float(b)) < 0.005
-        except (TypeError, ValueError):
-            return False
+    """Exact, type-aware equality. Amounts are compared to the cent (values are 2-decimal
+    money); identifiers compare exactly except for grouping spaces; no case folding; a string
+    is never equal to a number."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return round(float(a) * 100) == round(float(b) * 100)
     if isinstance(a, str) and isinstance(b, str):
-        return a.replace(" ", "").lower() == b.replace(" ", "").lower()
+        return a.replace(" ", "") == b.replace(" ", "")
     return a == b
 
 

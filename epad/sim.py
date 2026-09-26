@@ -16,7 +16,10 @@ exposed as explicit parameters instead of being hidden in a model:
   instruction it sees in untrusted content (worst case 1.0);
 * ``compromise_prob`` (rho) -- probability that a reader payload fully controls
   the reader's schema-valid output for that document (worst case 1.0);
-* ``imperative_as_fact`` -- whether a purifier/reader keeps facts phrased as requests.
+* ``keep_imperative_facts`` -- probability a reader/purifier keeps a fact phrased as a request;
+* ``directive_as_claim`` -- probability a reader/purifier turns a valued directive ("use X
+  instead") into a factual claim. Together these make the instruction/fact split a *modelled
+  judgement* that can be wrong, rather than something the defenses read off the annotations.
 
 Random draws are keyed by (case, statement, purpose) so that every defense
 faces the same draws on the same case (paired comparison).
@@ -61,10 +64,12 @@ class ScriptedReader:
     claims for that key are dropped and the payload value is reported instead.
     """
 
-    def __init__(self, case_key: str, compromise_prob: float = 1.0, imperative_as_fact: bool = True):
+    def __init__(self, case_key: str, compromise_prob: float = 1.0, keep_imperative_facts: float = 1.0,
+                 directive_as_claim: float = 0.0):
         self.case_key = case_key
         self.rho = compromise_prob
-        self.imperative_as_fact = imperative_as_fact
+        self.keep_imp = keep_imperative_facts
+        self.dir_as_claim = directive_as_claim
         self._n = 0
 
     def read(self, runtime: Runtime, doc: Document, schema: Iterable[FactKey]) -> ReaderOutput:
@@ -80,12 +85,15 @@ class ScriptedReader:
                 out.claims.append(self._claim(doc, p.key, p.value, "declarative"))
         for s in doc.statements:
             if s.kind == "fact" and s.key in schema and s.key not in hijacked:
-                if s.phrasing == "imperative" and not self.imperative_as_fact:
-                    continue
+                if s.phrasing == "imperative" and draw(self.case_key, f"{doc.doc_id}:{s.text}", "imp_fact") >= self.keep_imp:
+                    continue                  # the reader mistakes a request-phrased fact for an instruction
                 out.claims.append(self._claim(doc, s.key, s.value, s.phrasing))
             elif s.kind == "directive":
                 out.directives.append(Directive(f"{doc.doc_id}:dir{len(out.directives)}", doc.doc_id, s.text,
                                                 s.action.tool if s.action else None))
+                if (s.key in schema and s.key not in hijacked
+                        and draw(self.case_key, f"{doc.doc_id}:{s.text}", "dir_claim") < self.dir_as_claim):
+                    out.claims.append(self._claim(doc, s.key, s.value, "imperative"))   # valued directive read as a fact
         return out
 
     def _claim(self, doc: Document, key: FactKey, value: Any, phrasing: str) -> Claim:

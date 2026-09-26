@@ -64,6 +64,7 @@ class TaskSpec:
     store_keys: tuple[tuple[str, FactKey], ...]   # trusted stores the planner consults: (store, key)
     fact_refs: tuple[tuple[FactKey, str], ...]    # deployment config: which reference covers which fact
     free_values: tuple[tuple[str, str], ...] = ()  # (slot name, value) for FREE slots decided by the planner
+    trusted_senders: tuple[str, ...] = ()          # counterparty addresses on record in the user's own contacts
 
     def reference_for(self, key: FactKey) -> Optional[str]:
         for k, r in self.fact_refs:
@@ -93,7 +94,9 @@ class Resolved:
     claim_ids: tuple[str, ...] = ()
 
 
-def _cmp(op: str, a: Any, b: Any) -> bool:
+def _cmp(op: str, a: Any, b: Any) -> Optional[bool]:
+    if isinstance(b, (int, float)) and not isinstance(a, (int, float)):
+        return None                      # type mismatch: the condition is not established
     return {"<=": a <= b, ">=": a >= b, "==": a == b, "!=": a != b}[op]
 
 
@@ -116,7 +119,7 @@ def instantiate(spec: TaskSpec, facts: dict[FactKey, Resolved], origin: str = "p
     """
     actions: list[ActionRequest] = []
     abstain: list[tuple[str, str]] = []
-    for tpl in spec.grant.templates:
+    for ti, tpl in enumerate(spec.grant.templates):
         c = eval_condition(tpl.condition, facts)
         if c is None:
             abstain.append((tpl.tool, f"condition fact {tpl.condition.fact} unresolved"))
@@ -145,7 +148,7 @@ def instantiate(spec: TaskSpec, facts: dict[FactKey, Resolved], origin: str = "p
         if missing is not None:
             abstain.append((tpl.tool, f"fact {missing} unresolved"))
             continue
-        actions.append(ActionRequest(tpl.tool, args, origin, tuple(just)))
+        actions.append(ActionRequest(tpl.tool, args, origin, tuple(just), ti))
     return actions, abstain
 
 

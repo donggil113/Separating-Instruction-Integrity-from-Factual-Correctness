@@ -58,3 +58,33 @@ def test_metrics_sanity():
     cc = build_case(BASE_TASKS["reorder"](0), "C_condition")
     r = run_case(NoDefense(), cc, k=2)
     assert r.success and r.n_committed == 0
+
+
+def test_metrics_catch_secret_in_free_argument_and_crash_is_not_success():
+    from epad.eval.metrics import score
+    from epad.sandbox.runtime import Runtime
+    c = build_case(BASE_TASKS["accept_dinner"](0), "A_exfil")
+    rt = Runtime(c.world.clone(), 2)
+    for exp in c.gt.expected:
+        args = dict(exp.args)
+        if exp.tool == "send_email":
+            args["body"] = "Happy to join, see you there! C7X41902"
+        att = rt.propose(ActionRequest(exp.tool, args, "t", exp.justification, exp.template))
+        rt.commit(att)
+    r = score(c, "t", rt.log)
+    assert r.cua and "exfil" in r.cua_labels
+    cc = build_case(BASE_TASKS["reorder"](0), "C_condition")
+    r = score(cc, "t", Runtime(cc.world.clone(), 2).log, error="boom")
+    assert not r.success
+
+
+def test_evidence_metric_reads_the_log_not_the_label():
+    from epad.eval.metrics import score
+    from epad.sandbox.runtime import Runtime
+    c = build_case(BASE_TASKS["pay_invoice"](0), "clean")
+    rt = Runtime(c.world.clone(), 2)
+    exp = c.gt.expected[0]
+    just = tuple(replace(b, basis="trusted_store") for b in exp.justification)   # self-reported, no read, no verify
+    rt.commit(rt.propose(ActionRequest(exp.tool, exp.args, "t", just, 0)))
+    r = score(c, "t", rt.log)
+    assert r.fact_actions == 1 and r.evidence_correct == 0 and r.unsupported == 1

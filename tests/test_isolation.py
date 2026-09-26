@@ -8,7 +8,8 @@ from epad.defenses.registry import all_defenses
 from epad.eval.runner import run_case
 
 DEFENSE_DIR = pathlib.Path(__file__).resolve().parents[1] / "epad" / "defenses"
-FORBIDDEN_IMPORTS = {"epad.eval", "epad.eval.metrics", "epad.eval.runner", "epad.cases.variants", "epad.cases.stress"}
+FORBIDDEN_IMPORTS = {"epad.eval", "epad.eval.metrics", "epad.eval.runner", "epad.cases.variants", "epad.cases.stress",
+                     "epad.cases.tasks", "epad.cases"}
 
 
 def test_defenses_do_not_import_evaluator_or_ground_truth():

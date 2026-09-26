@@ -63,5 +63,19 @@ def reference_outage(case: Case) -> Optional[Case]:
     return c
 
 
-STRESS = {"V1_stale_reference": stale_reference, "V2_poisoned_reference": poisoned_reference,
+SAME_PRINCIPAL_REFS = {"org_calendar", "supplier_catalog", "compatibility_checker", "airline_status",
+                       "restaurant_reservations"}   # run by the same party whose authenticated mailbox is in the case
+
+
+def same_principal_compromise(case: Case) -> Optional[Case]:
+    """B_false_auth where the reference belongs to the same principal as the compromised mailbox (audit BV-8)."""
+    if case.variant != "B_false_auth":
+        return None
+    key = _change_key(case)
+    if case.spec.reference_for(key) not in SAME_PRINCIPAL_REFS:
+        return None
+    return poisoned_reference(case)
+
+
+STRESS = {"V2_same_principal_compromise": same_principal_compromise, "V1_stale_reference": stale_reference, "V2_poisoned_reference": poisoned_reference,
           "V1_reference_outage": reference_outage}

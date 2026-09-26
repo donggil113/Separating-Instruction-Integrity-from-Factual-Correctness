@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from epad.cases.tasks import payee_id, slug
+from epad.ids import payee_id, product_id
 from epad.defenses.base import (ACTOR_SYSTEM_TOKENS, Defense, RunContext, planner_call, retrieve,
                                 store_values, try_verify)
 from epad.plan import TaskSpec, invert_transform
@@ -80,7 +80,7 @@ def checkable_keys(spec: TaskSpec, act: ActionRequest) -> list[tuple[FactKey, An
     if act.tool == "send_payment":
         out.append(((payee_id(act.args["payee"]), "account"), act.args["account"], None))
     if act.tool == "place_order":
-        out.append(((f"product:{act.args['sku']}@{slug(act.args['supplier'])}", "unit_price"),
+        out.append(((product_id(act.args['sku'], act.args['supplier']), "unit_price"),
                     act.args["unit_price"], None))
     seen, uniq = set(), []
     for k, v, tr in out:
@@ -108,8 +108,8 @@ class VerifyGuard(Defense):
                 if ref is None:
                     continue
                 ev = try_verify(rt, ref, key, value)
-                if ev is not None and ev.verdict == Verdict.REFUTED:
-                    reason = f"reference {ref} refutes {key[1]}={value}"
+                if ev is not None and ev.verdict in (Verdict.REFUTED, Verdict.CLOSE_MATCH):
+                    reason = f"reference {ref} answers {ev.verdict.value} for {key[1]}={value}"
                     break
             if reason:
                 rt.block(att, "verify_guard", reason)

@@ -3,74 +3,87 @@
 Emulation notes (details and sources: docs/05_baselines.md):
 
 CaMeL (Debenedetti et al., arXiv 2503.18813v2; code google-research/camel-prompt-injection)
-  * P-LLM writes the program from the user query only; Q-LLM extracts typed values
-    from untrusted text; the interpreter tracks provenance (capabilities).
-  * Policy (banking.py analogue): an *authority* argument (recipient / target
-    account / item acted upon) must be trusted, i.e. have only User /
-    TrustedToolSource provenance. Data arguments may carry untrusted values
-    subject to readers checks. We run readers checks CHARITABLY (non-sensitive
-    data treated as public), which only ever raises CaMeL's utility.
-  * No endorsement: a verifier/lookup output depends on its arguments, so a
-    confirmation keyed by an extracted value stays untrusted.
-  * Denied call -> halt + escalate to the user (we count a blocked attempt and do
-    not model the user's approval, which would be an extra oracle).
+  * P-LLM writes the program from the user query only; Q-LLM extracts typed values from untrusted
+    text; the interpreter tracks provenance (capabilities). NORMAL interpreter mode (code default).
+  * Policy (banking.py analogue): an *authority* argument (recipient / target account; by default
+    also the item acted upon -- see ``authority_roles``) must be trusted: User / TrustedToolSource
+    provenance, a trusted-store value, or a lookup keyed by the trusted id. Data arguments may carry
+    untrusted values subject to readers checks.
+  * ``readers="charitable"``: readers checks off (non-sensitive data public). This raises CaMeL's
+    utility AND its false-fact commits (both directions, audit CAMEL-2). ``readers="faithful"``:
+    a branch on document-derived data is a non-public control context (engine rule, denies), and
+    data derived from private web/file content cannot flow to a recipient.
+  * No endorsement: a verifier output depends on its arguments, so a confirmation keyed by an
+    extracted value stays untrusted. The strong plan is *policy-aware*: for authority facts it only
+    verifies candidates the policy could ever accept (the trusted store, or a lookup).
+  * Denial -> halt; later calls are not reached (recorded as escalations, not as attempts). The
+    user-approval oracle is not modelled.
 
 Fides (Costa et al., arXiv 2505.23643v2)
-  * Planner sees only trusted data; untrusted tool results are hidden in
-    variables; query_llm writes a U-labelled variable; P-T requires a trusted
-    context label for consequential calls.
-  * "as evaluated": P-T checks only the context label, not argument labels.
-  * "arg": argument-level P-T on security-critical arguments (target, item,
-    quantity), which the paper describes as the stricter variant (§4.3, §6.1).
-  * "typed": the capacity-based endorsement escape hatch (§5.2; not used in the
-    paper's evaluation): a U-labelled *bool* may enter the context without
-    tainting it; here the bool is the shared verifier's verdict.
-  * A verifier result keyed by a U value is U (Alg. 5 l.9); a lookup keyed by a
-    trusted entity id is T.
+  * Untrusted tool results are hidden in variables; query_llm writes U-labelled variables (one call
+    per retrieved document in this emulation); P-T requires a T context for consequential calls.
+  * A verify call whose arguments are all T (grant entity + trusted-store value) returns T; a lookup
+    keyed by a trusted id is T; a verify call on a U value returns U (Alg. 5 l.9).
+  * "as evaluated" policy: P-T on the context label only. Strong plan (audit FID-1): lookup; else
+    verify the T store value; CONFIRMED -> store; REFUTED -> pass the newest query_llm variable by
+    reference (unverified); budget exhausted/UNKNOWN -> store.
+  * "arg": argument-level P-T on critical arguments (target, item, quantity) (§4.3, §6.1).
+  * "typed": capacity-based endorsement escape hatch (§5.2; unused in the paper's evaluation) with
+    the bool taken from the shared verifier -- i.e. EP's resolver in a Fides shell (a transplant).
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
-from epad.defenses.base import (Defense, RunContext, commit_all, contested, latest_claim, planner_call,
-                                read_all, ref_info, retrieve, slot_roles, store_values, try_lookup,
-                                try_verify)
-from epad.defenses.ep import EvidencePreserving, resolve_with_evidence
-from epad.plan import Resolved, TaskSpec, instantiate
+from epad.defenses.base import (EP_POLICY, Defense, ResolvePolicy, RunContext, commit_all, latest_claim,
+                                planner_call, read_all, ref_info, resolve, retrieve, slot_roles, store_values,
+                                try_lookup, try_verify)
+from epad.defenses.ep import EvidencePreserving
+from epad.plan import Resolved, TaskSpec, apply_transform, instantiate
 from epad.sandbox.runtime import Runtime
 from epad.sandbox.world import values_equal
 from epad.schema import ActionRequest, FactKey, SlotKind, SlotRole, Verdict
 
-AUTHORITY_ROLES = {SlotRole.TARGET, SlotRole.ITEM}
+AUTHORITY_ROLES = frozenset({SlotRole.TARGET, SlotRole.ITEM})
 FIDES_CRITICAL = {SlotRole.TARGET, SlotRole.ITEM, SlotRole.QUANTITY}
 TRUSTED_BASES = {"user", "trusted_store", "reference_lookup", "free"}
 
 
-def _template(spec: TaskSpec, act: ActionRequest):
-    return next(t for t in spec.grant.templates if t.tool == act.tool)
-
-
-def _condition_bases(spec: TaskSpec, facts: dict[FactKey, Resolved]) -> list[str]:
-    return [facts[t.condition.fact].basis for t in spec.grant.templates
-            if t.condition and t.condition.fact in facts]
+def _evidence_binds(spec: TaskSpec, rt: Runtime, key: FactKey, b, transform) -> bool:
+    evid = {e.evidence_id: e for e in rt.log.verifications}
+    return any(evid.get(i) and evid[i].verdict == Verdict.CONFIRMED and evid[i].key == key
+               and evid[i].reference == spec.reference_for(key)
+               and values_equal(apply_transform(transform, evid[i].value), b.value) for i in b.evidence_ids)
 
 
 # ================================================================== CaMeL
 class CaMeL(Defense):
-    """``planner="as_evaluated"``: Q-LLM extracts each fact from the documents the
-    request points to (latest value), falling back to the trusted store; no
-    verification. ``planner="strong"``: lookups when the reference supports them,
-    and the same claim-verification plan as EP for everything else.
-    ``endorse=True`` adds our rule R2 to the policy (ablation: EP inside CaMeL)."""
+    """``planner="as_evaluated"``: the Q-LLM extracts each fact from the documents the request
+    points to (newest value), falling back to the trusted store; no verification.
+    ``planner="strong"``: the policy-aware plan described in the module docstring.
+    ``endorse`` (transplant): "authority" adds EP's rule R2 for authority arguments only;
+    "all" makes every FACT argument trusted-or-endorsed (full-scope transplant)."""
 
     family = "existing (emulated)"
 
-    def __init__(self, planner: str = "strong", endorse: bool = False, name: Optional[str] = None):
+    def __init__(self, planner: str = "strong", endorse: Optional[str] = None, readers: str = "charitable",
+                 authority_roles: frozenset = AUTHORITY_ROLES, name: Optional[str] = None):
         self.planner = planner
         self.endorse = endorse
-        self.name = name or {("as_evaluated", False): "CaMeL (as evaluated)", ("strong", False): "CaMeL (strong plan)",
-                             ("strong", True): "CaMeL + endorsement"}[(planner, endorse)]
-        self.description = f"plan-first + provenance policy; planner={planner}; endorse={endorse}"
+        self.readers = readers
+        self.authority_roles = authority_roles
+        base = {("as_evaluated", None): "CaMeL (as evaluated)", ("strong", None): "CaMeL (strong plan)",
+                ("strong", "authority"): "CaMeL + endorsement (authority args)",
+                ("strong", "all"): "CaMeL + endorsement (all fact args)"}[(planner, endorse)]
+        suffix = [] if readers == "charitable" else ["faithful readers"]
+        if authority_roles != AUTHORITY_ROLES:
+            suffix.append("TARGET-only authority")
+        self.name = name or (base + (", " + ", ".join(suffix) if suffix else ""))
+        self.description = f"plan-first + provenance policy; planner={planner}; endorse={endorse}; readers={readers}"
+
+    def _is_authority_fact(self, spec: TaskSpec, key: FactKey) -> bool:
+        return bool(slot_roles(spec, key) & self.authority_roles) and not any(
+            t.condition and t.condition.fact == key for t in spec.grant.templates)
 
     def run(self, spec: TaskSpec, rt: Runtime, ctx: RunContext) -> None:
         planner_call(rt, spec)                       # P-LLM writes the program from the query only
@@ -86,39 +99,49 @@ class CaMeL(Defense):
                     facts[key] = Resolved(c.value, "untrusted", claim_ids=(c.claim_id,))
                 elif key in stores:
                     facts[key] = Resolved(stores[key], "trusted_store")
-            else:
-                r = resolve_with_evidence(spec, rt, key, claims, stores.get(key), endorse=True,
-                                          omit=ctx.omits(key))
-                if r is not None:
-                    facts[key] = r
+                continue
+            # strong plan: never spend budget on a candidate the policy can never accept
+            bindable = self.endorse is not None or not self._is_authority_fact(spec, key)
+            pol = EP_POLICY if bindable else ResolvePolicy(endorse=False)
+            r = resolve(spec, rt, key, claims, stores.get(key), pol, omit=ctx.omits(key))
+            if r is not None:
+                facts[key] = r
         actions, abst = instantiate(spec, facts, origin="p-llm")
         for tool, why in abst:
             rt.abstain(tool, why)
-        halted = False
-        for act in actions:
-            att = rt.propose(act)
-            if halted:
-                rt.block(att, "camel_policy", "execution halted after an earlier denial")
-                continue
+        channel = {d.doc_id: d.channel for d in docs}
+        doc_channels = lambda r: [channel.get(c.split(":")[0]) for c in r.claim_ids if c.split(":")[0] in channel]
+        cond_private = self.readers == "faithful" and any(
+            t.condition and t.condition.fact in facts and doc_channels(facts[t.condition.fact])
+            for t in spec.grant.templates)
+        for i, act in enumerate(actions):
             reason = self.policy(spec, rt, act)
+            if not reason and self.readers == "faithful":
+                if cond_private:
+                    reason = "engine: consequential call under a non-public control context"
+                elif any("web" in doc_channels(facts.get(tpl_s.fact)) for tpl_s in
+                         spec.grant.templates[act.template].slots if tpl_s.kind == SlotKind.FACT and facts.get(tpl_s.fact)):
+                    reason = "readers: argument derived from private (web/file) data the recipient cannot read"
+            att = rt.propose(act)
             if reason:
                 rt.block(att, "camel_policy", reason)
-                halted = True                        # SecurityPolicyDeniedError halts the program
-            else:
-                rt.commit(att)
+                for later in actions[i + 1:]:      # SecurityPolicyDeniedError halts the program
+                    rt.abstain(later.tool, "not executed: program halted after a policy denial")
+                return
+            rt.commit(att)
 
     def policy(self, spec: TaskSpec, rt: Runtime, act: ActionRequest) -> Optional[str]:
-        tpl = _template(spec, act)
-        evid = {e.evidence_id: e for e in rt.log.verifications}
+        tpl = spec.grant.templates[act.template]
         for b in act.justification:
             s = tpl.slot(b.slot)
-            if s.role not in AUTHORITY_ROLES or b.basis in TRUSTED_BASES:
+            if s.kind != SlotKind.FACT:
                 continue
-            if self.endorse and b.basis == "evidence" and any(
-                    evid.get(i) and evid[i].verdict == Verdict.CONFIRMED and evid[i].key == s.fact
-                    and evid[i].reference == spec.reference_for(s.fact) for i in b.evidence_ids):
+            needs_trust = s.role in self.authority_roles or self.endorse == "all"
+            if not needs_trust or b.basis in TRUSTED_BASES:
                 continue
-            return f"authority argument '{b.slot}' does not come from a trusted source"
+            if self.endorse and b.basis == "evidence" and _evidence_binds(spec, rt, s.fact, b, s.transform):
+                continue
+            return f"argument '{b.slot}' does not come from a trusted source"
         return None
 
 
@@ -133,57 +156,57 @@ class Fides(Defense):
         self.name = name or {("as_evaluated", "as_evaluated"): "Fides (as evaluated)",
                              ("as_evaluated", "strong"): "Fides (strong plan)",
                              ("arg", "strong"): "Fides (arg-level P-T)",
-                             ("typed", "strong"): "Fides (typed endorsement)"}[(mode, planner)]
+                             ("typed", "strong"): "Fides shell + EP resolver (typed hatch)"}[(mode, planner)]
         self.description = f"IFC planner with hiding + query_llm; policy mode={mode}; planner={planner}"
+
+    def _store_first(self, spec, rt, key, claims, sv, ref, critical_T: bool) -> Optional[Resolved]:
+        """Verify the T store value (T args -> T verdict). REFUTED -> the U claim (as_evaluated) or
+        nothing that a T-requiring argument could take (arg mode). Budget/UNKNOWN -> T store value."""
+        ev = try_verify(rt, ref, key, sv)
+        if ev is None or ev.verdict == Verdict.UNKNOWN:
+            return Resolved(sv, "trusted_store")
+        if ev.verdict == Verdict.CONFIRMED:
+            return Resolved(sv, "trusted_store", (ev.evidence_id,))
+        c = latest_claim(claims, key)                # store refuted
+        if c is not None and not values_equal(c.value, sv):
+            return Resolved(c.value, "untrusted", claim_ids=(c.claim_id,))
+        return None
 
     def run(self, spec: TaskSpec, rt: Runtime, ctx: RunContext) -> None:
         keys = spec.grant.fact_keys()
         planner_call(rt, spec, 120)                      # choose retrieval (context stays T: results hidden)
         docs = retrieve(spec, rt)
         stores = store_values(spec, rt)
-        claims, _, _ = read_all(rt, docs, keys, ctx)     # query_llm, one query per fact argument
-        context_tainted = False
+        claims, _, _ = read_all(rt, docs, keys, ctx)     # query_llm into U variables
         facts: dict[FactKey, Resolved] = {}
         for key in keys:
             planner_call(rt, spec, 80)                   # one planner turn per argument decision
+            if self.mode == "typed":                     # verifier bool admitted by the capacity hatch
+                r = resolve(spec, rt, key, claims, stores.get(key), EP_POLICY, omit=ctx.omits(key))
+                if r is not None:
+                    facts[key] = r
+                continue
             ref, lookup = ref_info(spec, rt, key)
             critical = bool(slot_roles(spec, key) & FIDES_CRITICAL)
+            sv = stores.get(key)
             if ref and lookup and self.planner == "strong":   # lookup keyed by the trusted entity id -> T
                 r = try_lookup(rt, ref, key)
                 if r is not None:
                     facts[key] = r
                     continue
-            if self.mode == "typed":
-                # verifier verdicts are bools: admitted to the context by the capacity escape hatch
-                r = resolve_with_evidence(spec, rt, key, claims, stores.get(key), endorse=True,
-                                          omit=ctx.omits(key))
+            if self.planner == "strong" and sv is not None and ref and (self.mode == "as_evaluated" or critical):
+                r = self._store_first(spec, rt, key, claims, sv, ref, critical)
                 if r is not None:
                     facts[key] = r
                 continue
-            if self.mode == "arg" and critical:
-                sv = stores.get(key)
-                if sv is not None and ref:
-                    ev = try_verify(rt, ref, key, sv)    # T args -> T verdict: no taint
-                    if ev is not None and ev.verdict == Verdict.CONFIRMED:
-                        facts[key] = Resolved(sv, "trusted_store", (ev.evidence_id,))
-                        continue
-                    if ev is None:                       # budget exhausted: T value, unverified
-                        facts[key] = Resolved(sv, "trusted_store")
-                        continue
-                c = latest_claim(claims, key)            # only a U value remains -> policy will block it
-                if c is not None and (sv is None or not values_equal(c.value, sv)):
-                    facts[key] = Resolved(c.value, "untrusted", claim_ids=(c.claim_id,))
-                continue
-            # as evaluated (and non-critical args under "arg"): pass the query_llm variable by reference
-            c = latest_claim(claims, key)
+            c = latest_claim(claims, key)                # pass the query_llm variable by reference
             if c is not None:
                 facts[key] = Resolved(c.value, "untrusted", claim_ids=(c.claim_id,))
-            elif key in stores:
-                facts[key] = Resolved(stores[key], "trusted_store")
+            elif sv is not None:
+                facts[key] = Resolved(sv, "trusted_store")
         # a condition on a U value is data-dependent control flow: the planner must expand it -> context U
-        for t in spec.grant.templates:
-            if t.condition and t.condition.fact in facts and facts[t.condition.fact].basis == "untrusted":
-                context_tainted = True
+        context_tainted = any(t.condition and t.condition.fact in facts and facts[t.condition.fact].basis == "untrusted"
+                              for t in spec.grant.templates)
         actions, abst = instantiate(spec, facts, origin="fides-planner")
         for tool, why in abst:
             rt.abstain(tool, why)
@@ -200,7 +223,7 @@ class Fides(Defense):
         if context_tainted:
             return "P-T: consequential call made in a U-labelled context"
         if self.mode == "arg":
-            tpl = _template(spec, act)
+            tpl = spec.grant.templates[act.template]
             for b in act.justification:
                 if tpl.slot(b.slot).role in FIDES_CRITICAL and b.basis not in TRUSTED_BASES:
                     return f"P-T(arg): argument '{b.slot}' is U-labelled"
@@ -209,9 +232,8 @@ class Fides(Defense):
 
 # ================================================================== controls
 class ProvenanceTrust(EvidencePreserving):
-    """EP's authority rule R1, but truth taken from provenance: a claim from an
-    authenticated sender is accepted (newest wins); unauthenticated claims are
-    ignored; no verification. Tests 'hash/provenance is not truth'."""
+    """EP's authority rule R1, but truth taken from provenance: a claim from an authenticated sender
+    is accepted (newest wins); unauthenticated claims are ignored; no verification."""
     name = "Provenance-as-truth"
     family = "ablation"
     description = "grant-only actions; authenticated-sender claims accepted as true"
@@ -237,7 +259,7 @@ class ProvenanceTrust(EvidencePreserving):
 
 
 class ReferenceOnly(Defense):
-    """Grant-only actions; facts only from references (lookup) or verified trusted
+    """Grant-only actions; facts only from references (lookup) or reference-confirmed trusted
     stores; documents are never read. Tests whether reading documents is needed."""
     name = "Reference-only"
     family = "ablation"
@@ -248,17 +270,9 @@ class ReferenceOnly(Defense):
         stores = store_values(spec, rt)
         facts = {}
         for key in spec.grant.fact_keys():
-            ref, lookup = ref_info(spec, rt, key)
-            if ref and lookup:
-                r = try_lookup(rt, ref, key)
-                if r is not None:
-                    facts[key] = r
-                continue
-            sv = stores.get(key)
-            if sv is not None and ref:
-                ev = try_verify(rt, ref, key, sv)
-                if ev is not None and ev.verdict == Verdict.CONFIRMED:
-                    facts[key] = Resolved(sv, "trusted_store", (ev.evidence_id,))
+            r = resolve(spec, rt, key, [], stores.get(key), ResolvePolicy(endorse=False))
+            if r is not None:
+                facts[key] = r
         actions, abst = instantiate(spec, facts, origin="grant")
         for tool, why in abst:
             rt.abstain(tool, why)
