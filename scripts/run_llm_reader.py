@@ -24,7 +24,7 @@ from epad.eval.runner import run_case                              # noqa: E402
 from epad.llm_reader import LLMReader, anthropic_complete_json     # noqa: E402
 
 PLAN_FIRST = ["CaMeL (as evaluated)", "CaMeL (strong plan)", "Fides (strong plan)", "Provenance-as-truth",
-              "CaMeL + endorsement", "Fides (typed endorsement)", "EP (ours)"]
+              "CaMeL + endorsement (all fact args)", "Fides shell + EP resolver (typed hatch)", "EP (ours)"]
 
 
 def main():
@@ -36,6 +36,9 @@ def main():
     factory = lambda: LLMReader(complete)
     cases = build_suite(seeds=tuple(args.seeds))
     defenses = [d for d in all_defenses() if d.name in PLAN_FIRST]
+    missing = set(PLAN_FIRST) - {d.name for d in defenses}
+    if missing:
+        raise SystemExit(f"unknown defense names: {sorted(missing)}")
     rs = [run_case(d, c, args.k, reader_factory=factory) for d in defenses for c in cases]
     out = os.path.join(os.path.dirname(__file__), "..", "results")
     os.makedirs(out, exist_ok=True)

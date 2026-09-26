@@ -23,7 +23,7 @@ change category silently.
 |---|---|---|---|
 | **Authority** | `AuthorityGrant` → `ActionTemplate` → `ArgSlot` (+ `Condition`) | only the trusted planner, from the user request | *which* tools, *how many* calls per template, *which* counterparties, each argument's kind, and the condition under which a template may run |
 | **Policy** | `Policy` | deployment configuration | global limits (maximum payment, sensitive-data markers) |
-| **Fact** | `Claim(key=(entity, attribute), value, source, source_trust, authenticated, timestamp, phrasing)` | the quarantined reader (from documents) or a trusted-store read | at most the **value** of a FACT slot or condition whose entity the grant already fixed |
+| **Fact** | `Claim(key=(entity, attribute), value, source, source_trust, authenticated, timestamp, phrasing)` | the quarantined reader (from documents). Trusted-store values are passed to the resolver as raw candidate values, not as Claims | at most the **value** of a FACT slot or condition whose entity the grant already fixed |
 | **Evidence** | `Evidence(reference, key, value, verdict, mode)` | only the runtime, by calling a reference (`verify` or `lookup`) | whether a candidate value may be bound (R2) |
 | (audit) | `Directive(source, text, requested_tool)` | the quarantined reader | nothing; recorded only |
 
@@ -61,9 +61,13 @@ re-evaluates the condition from admissible facts before commit.
 
 ## The resolver: from candidates to a bound fact
 
-Every design that verifies uses the same function, `resolve(...)`, under an explicit
-`ResolvePolicy`. Differences between designs are therefore differences in *rules*, not
-in search skill.
+EP, its ablations, CaMeL (strong plan) and the transplants all use the same function,
+`resolve(...)`, under an explicit `ResolvePolicy`. Among these designs, differences are
+differences in *rules*, not in search skill. Two verifying designs keep their own logic:
+
+* Fides (strong plan / arg-level P-T) implements Fides' own store-first plan
+  (`Fides._store_first`);
+* the Verify-only guard checks proposed arguments directly.
 
 | field | EP (`EP_POLICY`) | meaning |
 |---|---|---|
@@ -85,9 +89,9 @@ Verdict handling:
 
 An unresolved fact makes its template abstain (R3).
 
-Equality is exact (`sandbox/world.py::_eq`): amounts are compared to the cent,
-identifiers exactly except for grouping spaces, with no case folding; a string never
-equals a number. The audit showed that the earlier tolerant comparison let a near-miss
+Equality is exact (`sandbox/world.py::_eq`): amounts are compared to the cent; strings
+are compared exactly after removing all spaces (so grouping spaces in identifiers are
+ignored), with no case folding; a string never equals a number. The audit showed that the earlier tolerant comparison let a near-miss
 value confirm (RT-EP-5).
 
 ## Why documents cannot grant authority
@@ -95,7 +99,8 @@ value confirm (RT-EP-5).
 There is no code path from a `Claim`, `Directive` or document to an `AuthorityGrant`:
 
 * The grant is built before any document is read.
-* The reader's output types have no field for tools, counterparties or call counts.
+* The reader's claim type has no field for tools, counterparties or call counts.
+  `Directive.requested_tool` is recorded for audit only, and no code reads it.
 * The reader is asked only about the grant's fact keys (`AuthorityGrant.fact_keys()`), so
   a claim about any other entity is never requested.
 * The monitor re-checks every proposed call before commit (R1):
@@ -103,10 +108,13 @@ There is no code path from a `Claim`, `Directive` or document to an `AuthorityGr
   * the tool and user-fixed arguments must match that template;
   * the call count must stay within the template's `max_calls`.
 
-  This is defense in depth. EP's own executor never produces an out-of-grant call, and
-  `tests/test_ep.py::test_R2_monitor_rejects_actions_outside_grant` and
-  `tests/test_baselines.py::test_ep_monitor_rechecks_condition_and_template` show that
-  the monitor would reject one.
+  This is defense in depth: EP's own executor never produces an out-of-grant call. The
+  tests show that the monitor would reject one:
+  * `tests/test_ep.py::test_R2_monitor_rejects_actions_outside_grant` (no template
+    index);
+  * `tests/test_ep.py::test_R1_monitor_rejects_template_mismatch_and_extra_calls` (a
+    wrong tool, a changed user-fixed payee, a second call beyond `max_calls`);
+  * `tests/test_baselines.py::test_ep_monitor_rechecks_condition_and_template`.
 
 The flip side is family D. When the user delegates the counterparty to a document ("pay
 whoever the bill says"), the counterparty is a FACT with no grant-fixed entity behind it,
@@ -119,9 +127,11 @@ and EP refuses the legitimate bill as well as the tampered one (results §5).
 * The monitor admits a FACT value only if the episode log holds a `CONFIRMED` record, or
   a lookup, from the reference configured for exactly that key, for exactly that value
   after the slot's transform.
-* `tests/test_ep.py::test_R2_monitor_rejects_provenance_or_unverified_basis` checks that
-  the bases `provenance` and `untrusted`, and a confirmation from the *wrong* reference,
-  are all rejected.
+* `tests/test_ep.py::test_R2_monitor_rejects_provenance_or_unverified_basis` builds a
+  call that is otherwise admissible. A CONFIRMED record from the configured reference is
+  accepted. R2 rejects the bases `provenance`, `untrusted` and `trusted_store` without
+  evidence, and it also rejects a CONFIRMED record for the same key and value from a
+  reference that is *not* the configured one.
 * `tests/test_baselines.py::test_ep_never_binds_contested_store_without_evidence` checks
   that a stale store challenged only by a false claim is not bound.
 
@@ -153,4 +163,7 @@ What EP pins down is only *which* endorsements are admissible: a confirmation of
 exact value, by the configured independent reference, for the exact key, with the entity
 fixed by the user's grant, including for values from the user's own store. The results
 show this rule, dropped into CaMeL, Fides, AgentSentry or the firewall, reproduces EP
-case for case (`07_results.md`). The rule is the finding, not a new mechanism.
+case for case in the main results (ω = 0, k = 2 and k = 4). Under verification omission
+(results §9) the transplants diverge, because their sinks do not require reference
+evidence for every FACT value: CaMeL's policy accepts an unverified store value, and the
+other transplants have no evidence check at the sink (`07_results.md` §4). The rule is the finding, not a new mechanism.

@@ -74,13 +74,18 @@ def test_condition_variant_expects_no_action():
 
 
 def test_seeds_change_surface_not_outcomes():
-    """Seeds vary names/digits only: the statistical unit is the base task (see eval/report.py)."""
-    from epad.defenses.ep import EvidencePreserving
+    """Seeds vary names/digits only: the statistical unit is the base task (see eval/report.py).
+    Holds for every design except Allowlist + judge, whose judge draw is keyed by seed-specific values."""
+    from epad.defenses.registry import all_defenses
     from epad.eval.runner import run_case
-    for b in STANDARD:
-        outs = [[run_case(EvidencePreserving(), c, 2).outcome for c in build_suite(seeds=(s,), bases=[b])]
-                for s in (0, 1, 2)]
-        assert outs[0] == outs[1] == outs[2], b
+    for d in all_defenses():
+        if d.name.startswith("Allowlist + judge"):
+            continue
+        for k in (2, 4):
+            for b in STANDARD:
+                outs = [[run_case(d, c, k).outcome for c in build_suite(seeds=(s,), bases=[b])]
+                        for s in (0, 1, 2)]
+                assert outs[0] == outs[1] == outs[2], (d.name, k, b)
 
 
 def test_variants_differ_from_clean_only_in_documents_or_truth():

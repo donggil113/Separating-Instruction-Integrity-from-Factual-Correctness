@@ -18,20 +18,61 @@ def test_R1_documents_cannot_add_actions():
         assert "injected" not in r.cua_labels and "exfil" not in r.cua_labels, c.case_id
 
 
-def test_R2_monitor_rejects_provenance_or_unverified_basis():
+def _pay_invoice_monitor_setup(extra_ref=False):
+    """pay_invoice clean case, a runtime, the expected call (with its template index), and the amount
+    fact already confirmed by its configured reference, so only the account argument is under test."""
+    from epad.plan import Resolved
+    from epad.sandbox.world import Reference
     c = build_case(BASE_TASKS["pay_invoice"](0), "clean")
-    ep = EvidencePreserving()
-    rt = Runtime(c.world.clone(), verify_budget=2)
+    world = c.world.clone()
+    k_acct = (payee_id("Acme Office Supplies"), "account")
+    if extra_ref:          # a second reference that also covers the account, but is not the configured one
+        world.references["other_registry"] = Reference("other_registry", frozenset({"account"}), False,
+                                                       {k_acct: c.gt.true_facts[k_acct]})
+    rt = Runtime(world, verify_budget=4)
     good = c.gt.expected[0]
-    for basis in ("provenance", "untrusted"):
-        just = tuple(replace(b, basis=basis) if b.slot == "account" else b for b in good.justification)
-        act = ActionRequest(good.tool, good.args, "test", just)
-        assert ep.monitor(c.spec, rt, act, {}) is not None
-    # a CONFIRMED record from the wrong reference is not admissible either
-    ev = rt.verify("vendor_portal", (payee_id("Acme Office Supplies"), "account"), good.args["account"])
-    just = tuple(BoundArg("account", good.args["account"], "evidence", (ev.evidence_id,)) if b.slot == "account" else b
-                 for b in good.justification)
-    assert ep.monitor(c.spec, rt, ActionRequest(good.tool, good.args, "test", just), {}) is not None
+    k_amt = c.spec.grant.templates[0].condition.fact
+    ev_amt = rt.verify("vendor_portal", k_amt, c.gt.true_facts[k_amt])
+    facts = {k_amt: Resolved(c.gt.true_facts[k_amt], "evidence", (ev_amt.evidence_id,))}
+    return c, rt, good, k_acct, facts
+
+
+def test_R2_monitor_rejects_provenance_or_unverified_basis():
+    from epad.plan import Resolved
+    ep = EvidencePreserving()
+    c, rt, good, k_acct, facts = _pay_invoice_monitor_setup(extra_ref=True)
+    acct = good.args["account"]
+    assert good.template == 0
+    # positive control: a CONFIRMED record from the configured reference is admitted
+    ev = rt.verify("confirmation_of_payee", k_acct, acct)
+    ok = {**facts, k_acct: Resolved(acct, "evidence", (ev.evidence_id,))}
+    assert ep.monitor(c.spec, rt, good, ok) is None
+    # provenance (authenticated sender) or an untrusted claim, without evidence: rejected by R2
+    for basis in ("provenance", "untrusted", "trusted_store"):
+        bad = {**facts, k_acct: Resolved(acct, basis)}
+        assert ep.monitor(c.spec, rt, good, bad).startswith("R2"), basis
+    # a CONFIRMED record for the same key and value, but from a reference that is not the configured one
+    ev_other = rt.verify("other_registry", k_acct, acct)
+    assert ev_other.verdict.value == "confirmed"
+    wrong = {**facts, k_acct: Resolved(acct, "evidence", (ev_other.evidence_id,))}
+    assert ep.monitor(c.spec, rt, good, wrong).startswith("R2")
+
+
+def test_R1_monitor_rejects_template_mismatch_and_extra_calls():
+    from epad.plan import Resolved
+    ep = EvidencePreserving()
+    c, rt, good, k_acct, facts = _pay_invoice_monitor_setup()
+    ev = rt.verify("confirmation_of_payee", k_acct, good.args["account"])
+    facts = {**facts, k_acct: Resolved(good.args["account"], "evidence", (ev.evidence_id,))}
+    assert ep.monitor(c.spec, rt, good, facts) is None
+    # the right template index, but a different user-fixed payee
+    other_payee = replace(good, args={**good.args, "payee": "Northwind Settlement Services"})
+    assert ep.monitor(c.spec, rt, other_payee, facts).startswith("R1")
+    # the right template index, but a different tool
+    assert ep.monitor(c.spec, rt, replace(good, tool="send_email"), facts).startswith("R1")
+    # a second call of a template whose max_calls is 1
+    rt.commit(rt.propose(good))
+    assert ep.monitor(c.spec, rt, good, facts).startswith("R1")
 
 
 def test_R2_monitor_rejects_actions_outside_grant():

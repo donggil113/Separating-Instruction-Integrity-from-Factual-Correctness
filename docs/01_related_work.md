@@ -13,12 +13,12 @@ table locations. Anything a reader inferred rather than read is marked *(inferen
 | kind | defense (system-level) | defense (system-level IFC) | defense (inference-time detection + mitigation) | benchmark | benchmark |
 | core mechanism | P-LLM writes a program from the trusted query; the Q-LLM parses untrusted text into typed values; the interpreter tracks capabilities (sources, readers); per-tool policies are checked before each call | dynamic taint tracking over an integrity × readers lattice; selective hiding of untrusted results in variables; `query_llm` into U variables; P-T / P-F policies | four-regime counterfactual re-execution at each tool-return boundary; causal IE/ACE/DE; purification ("instruction-to-evidence projection"); Revise; Auth effect gate | 4 suites; user tasks × injection tasks; deterministic utility/security predicates | 3 suites of dynamic, open-ended tasks with *helpful third-party instructions* on the critical path |
 | how an untrusted value reaches a tool argument | Q-LLM output or field access; allowed in *data* arguments subject to readers checks; *authority* arguments (recipient, password, file id…) must be trusted | pass-by-reference U variables; the evaluated P-T checks only the **context** label, not the arguments | the LLM reads the (purified) content and fills arguments freely; after an alarm only, sensitive arguments must be "supported by trusted context or structured evidence" | – | – |
-| legitimate fact change (our C) | treated exactly like a malicious one: denied when it feeds an authority argument (banking policy-trigger rate 58% without attack, Table 8) | evaluated P-T: accepted unchecked; argument-level P-T: refused; changes that affect control flow (DD tasks) are blocked | kept if phrased declaratively (Purify keeps facts); no truth check | present only implicitly inside benign tasks (banking 2 and 13; 0 is confounded, 12 is delegation); no paired false twin | present implicitly (OTPs, bills, codes); no paired false twin |
+| legitimate fact change (our C) | treated exactly like a malicious one: denied when it feeds an authority argument (banking policy-trigger rate 58% without attack, Table 8) | evaluated P-T: accepted unchecked; argument-level P-T: refused; changes that affect control flow (DD tasks) are blocked | kept if phrased declaratively (Purify keeps facts) *(inference; not evaluated)*; no truth check | present only implicitly inside benign tasks (banking 2 and 13; 0 is confounded, 12 is delegation); no paired false twin | present implicitly (OTPs, bills, codes); no paired false twin |
 | false fact (our B) | no truth mechanism; blocked only incidentally in authority arguments; text-to-text is an explicit non-goal (§3.1) | none; "the call to query_llm can still generate incorrect results" (§6.1) | none; a false declarative fact survives purification and gives IE ≈ 0 *(inference)* | none; data-only result manipulation is named as an open weakness of isolation (§4.3) | none; all 28 injection tasks are imperative |
 | IFC / taint | yes (capabilities, STRICT mode for implicit flows) | yes (lattice labels, noninterference claim, Prop. 1) | no | – | – |
 | replay / counterfactual | evaluation replay only (`--replay-with-policies`) | no | yes, the core (MELON-style masked re-execution, extended) | – | – |
 | endorsement / declassification | none automated; a verifier output keyed by an untrusted value stays untrusted; the only path is user confirmation | robust declassification (P-F or P-T); a *capacity-based endorsement escape hatch* (bool/enum, §5.2) that is **not** used in the evaluation | none | – | – |
-| security metric | committed attacks + policy-trigger rate | committed attacks (adjusted) | ASR (committed), UA, CU, FPR | targeted ASR (committed), utility, utility under attack | ASR (committed), benign utility, utility under attack |
+| security metric | committed attacks + policy-trigger rate | committed attacks (adjusted) | ASR (apparently committed; not stated), UA, CU, FPR | targeted ASR (committed), utility, utility under attack | ASR (committed), benign utility, utility under attack |
 | blocked vs committed separated? | trigger rates only | no | no (the threat model counts proposals; reported ASR appears to count commits) | no | no |
 | cost | 2.82× / 2.73× input/output tokens at the median (§6.5; tables inconsistent) | 2.84× mean / 2.43× median tokens vs Basic (o3, Fig. 7) | O(4K+B) extra agent calls per boundary; never measured | ~US$35 per 629 cases (GPT-4o) | not reported |
 | headline | 77% of tasks with provable security vs 84% undefended (abstract, v2) | stops all AgentDojo PIAs with policies; utility with policy 50–61% vs Basic* 41–45% (Table 7) | ASR 0%, mean UA 74.55% on AgentDojo (Table 2) | GPT-4o: 69% utility / 47.7% ASR, no defense (Table 3) | GPT-4o no defense BU 53.3 / UA 55.5 / ASR 37.8; CaMeL 0/0/0 on all 12 models (Table 3), run without policy enforcement (§2) |
@@ -125,19 +125,25 @@ None of the five core works does any of the following. After the wider sweep
 their **combination** remains:
 
 1. **Pairing.** The same fact slot is paired across A (instruction, facts fixed), B
-   (false or contradictory fact) and C (legitimate change), plus D (delegation). A
+   (false or contradictory fact) and C (legitimate change). A
    defense's instruction-integrity behavior and its factual-correctness behavior can
-   then be read separately. NetInjectBench and Influence Is Not Authority pair
-   legitimate and malicious classes, but without false-world-fact cases and IFC/replay
-   baselines.
-2. **Equal information.** Every design gets an **independent, confirm-only reference**
-   (a Confirmation-of-Payee–style service) under one budget. The question is whether any
-   design can turn that reference into safe utility. Without such a reference, B and C
-   cannot be told apart (Abdelnabi & Bagdasarian; SIEVE, SARA and APPA concede this).
-3. **Separate reporting.** One table separates committed unauthorized actions, blocked
-   attempts, safe failures and escalations, evidence correctness and cost.
-4. **Transplant tests.** Each existing framework is run with the candidate rule added,
-   to show *which rule*, not which framework, produces a difference.
+   then be read separately. A separate delegation family D (one base task, 6 cases)
+   measures the cost of rule R1. NetInjectBench and Influence Is Not Authority pair
+   legitimate and malicious classes, but neither has false-world-fact cases or IFC
+   baselines. Influence Is Not Authority does evaluate attribution/replay-style
+   guardrails; NetInjectBench does not.
+2. **Equal information.** Every design gets the same **independent reference** under one
+   budget: confirm-only (a Confirmation-of-Payee–style service) for 4 of 9 tasks and
+   lookup-capable for 5. The question is whether any design can turn that reference into
+   safe utility. Without such a reference, B and C cannot be told apart (Abdelnabi &
+   Bagdasarian; SIEVE concedes this, APPA concedes that validation cannot rule out "a
+   false allowed value", and SARA scopes pure data-dependency attacks out).
+3. **Separate reporting.** Committed unauthorized actions, blocked attempts, safe
+   failures and escalations, evidence correctness and cost are reported as separate
+   columns (results §1).
+4. **Transplant tests.** CaMeL, Fides, AgentSentry and the firewall are each run with
+   the candidate rule added, to show *which rule*, not which framework, produces a
+   difference.
 
 Whether a *mechanism* beyond an endorsement rule is needed is an empirical question,
 answered in `08_go_no_go.md`. In the idealized setting the answer is **no**: the rule

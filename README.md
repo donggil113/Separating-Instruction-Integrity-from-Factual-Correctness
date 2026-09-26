@@ -31,8 +31,9 @@ This repository contains:
 > It does **not** improve on the strongest existing configurations at the same
 > information and cost:
 >
-> * against CaMeL's strongest legal plan the gain is not significant (+9.3 pp
->   [+0.0, +18.1] at k = 4);
+> * against CaMeL's strongest legal plan the gain is not significant at the
+>   pre-registered budget (+2.5 pp [+0.0, +7.7] at k = 2). At k = 4 it is borderline
+>   (+9.3 pp [+0.0, +18.1]) and needs more verification calls;
 > * every significant gain over other baselines comes with more verification calls or
 >   more safe failures;
 > * EP's endorsement rule, transplanted into CaMeL, Fides, AgentSentry or the firewall,
@@ -68,7 +69,7 @@ tests/                      isolation/fairness invariants, benchmark well-formed
 
 ```bash
 pip install pytest                   # the only dependency for tests and experiments (stdlib otherwise)
-python -m pytest -q                  # 35 invariants
+python -m pytest -q                  # 36 invariants
 python scripts/run_experiments.py    # ~30 s; writes results/
 ```
 
@@ -97,10 +98,11 @@ for the reported results.
 
 * **Sandbox only.** There are no real accounts, mail, calendars, shops or payment rails,
   and no network use in the main path (`docs/02_threat_model.md`).
-* **No real LLM.** Model behavior is scripted, and every model-dependent effect is an
-  explicit, swept knob: φ, ρ, ω, `keep_imperative_facts`, `directive_as_claim`,
-  `p_fact_suggest` and q. Instruction-vs-fact separation comes from statement
-  annotations, which a real reader would have to infer. The results characterize
+* **No real LLM.** Model behavior is scripted. The main model-dependent effects are
+  explicit, swept knobs: φ, ρ, ω, `keep_imperative_facts`, `directive_as_claim`,
+  `p_fact_suggest` and q. Some are fixed: the reactive actor's credulity and its
+  instruction/fact separation, and AgentSentry's severity scoring. Instruction-vs-fact
+  separation comes from statement annotations, which a real reader would have to infer. The results characterize
   *defense structure* under an ideal planner. They are not comparable to AgentDojo or
   AgentDyn numbers.
 * **Nothing credited to prior work is claimed as new** (`docs/01_related_work.md` §3,
@@ -108,7 +110,12 @@ for the reported results.
   endorsement, replay, Dual-LLM, instruction-stripping purification, origin enforcement,
   approved-change classes, evidence-grounded arguments and bank verify-before-pay.
 * **Guarantees hold only under** P1, P2, V1–V3 and R0. EP is worse than no defense when a
-  reference is stale (97% CUA) or poisoned (100% CUA), and name-match references weaken
-  V1 (results §14, `docs/02_threat_model.md`).
+  reference is stale (97% vs 47% CUA), no better than no defense when it is poisoned
+  (100% CUA for both), and name-match references weaken V1 (results §14,
+  `docs/02_threat_model.md`).
+* **The NO_GO rule was extended after the audit** with a "cost (1 planner)" flag, a
+  base-task resampling unit and a k = 4 repeat (`docs/06_metrics.md`). The NO_GO verdict
+  holds without them: the transplants match EP, and every gain over CaMeL (strong plan)
+  needs more verification calls.
 * **The audit changed the design.** The pre-audit EP (kept as `EP v0`) relied on a
   benchmark regularity, and has 14.4% CUA on the extended suite (`docs/09_audit_log.md`).

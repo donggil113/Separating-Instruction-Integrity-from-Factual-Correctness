@@ -46,7 +46,7 @@ residue that the reference's capability determines**. EP at k = 4:
 
 | family | EP outcome | what produces it |
 |---|---|---|
-| **A** (instruction, facts fixed) | 100% utility, 0% CUA | R1: documents never add calls. Value redirects are refuted or never extracted. |
+| **A** (instruction, facts fixed) | 100% utility, 0% CUA | R1: documents never add calls. Directive redirects are never extracted as claims. A reader-payload value is extracted (ρ = 1) but never bound, because the user's record (or a lookup) is confirmed first. |
 | **B** (false or contradictory facts) | 100% utility, 0% CUA (98% utility at k = 2) | The user's record is confirmed first; false challengers are never bound. `B_same_name_mule` is handled only because the record is confirmed first. |
 | **C** (legitimate change) | 84% utility, 0% CUA; the other 16% are safe failures | A changed value is bound once the reference confirms it. The failures are `C_silent`, `C_suppressed` and `C_silent_attacked` on the 4 confirm-only tasks (12/27 each). There the true new value never reaches the resolver as a candidate (no document states it, or a ρ = 1 payload suppresses it), and a confirm-only reference cannot supply it. |
 | **D** (delegated counterparty) | 0/3 legitimate bills paid; 0/3 tampered bills paid | There is no grant-fixed entity to verify against, so EP refuses both. This is the price of R1. |
@@ -55,8 +55,10 @@ This answer does **not** rest on a new mechanism (§4).
 
 ## 3. Where EP differs from the strongest existing defenses
 
-**Only in one design cell.** Per cell, EP minus X, Δ utility / Δ CUA (pp), at k = 4
-(results §3):
+**Only in the confirm-only cells.** Against CaMeL (strong plan) the difference lies in
+one cell (authority × confirm-only). Against Fides it lies in both confirm-only cells.
+Where a lookup reference exists, there is no difference. Per cell, EP minus X, Δ utility /
+Δ CUA (pp), at k = 4 (results §3):
 
 | vs | authority × confirm-only (3 tasks) | data × confirm-only (1 task) | data × lookup (5 tasks) |
 |---|---|---|---|
@@ -86,7 +88,7 @@ agree exactly.
 | X | k | Δ utility pp | Δ CUA pp | Δ safe failure pp | Δ verify | verdict (§8) |
 |---|---|---|---|---|---|---|
 | CaMeL (strong plan) | 2 | +2.5 [+0.0, +7.7] (1/0) | 0 | −4.9 | +0.04 | no improvement |
-| CaMeL (strong plan) | 4 | +9.3 [+0.0, +18.1] (3/0) | 0 | −18.3 | +0.13 | no improvement |
+| CaMeL (strong plan) | 4 | +9.3 [+0.0, +18.1] (3/0) | 0 | −18.3 | +0.13 | no improvement (borderline: the lower bound is above 0 for 92 of 200 bootstrap seeds; if significant, it would be flagged for cost) |
 | CaMeL, TARGET-only authority | 2 | 0 (0 cases differ) | 0 | 0 | 0 | no improvement |
 | CaMeL, TARGET-only authority | 4 | +6.2 [+0.0, +12.4] (2/0) | 0 | −12.2 | +0.09 | no improvement |
 | Fides (strong plan) | 2 | +1.2 [−10.2, +15.6] (1/2) | −3.9 [−7.9, +0.0] (3/0) | +15.9 | +0.17 | no improvement |
@@ -94,7 +96,7 @@ agree exactly.
 | Fides (arg-level P-T) | 4 | +19.1 [+3.2, +37.1] (4/0) | 0 | −25.6 | +0.31 | improves, but cost (1 planner) → NO_GO |
 | AgentSentry | 4 | +46.3 [+41.6, +50.6] (9/0) | −56.2 | +13.4 | +1.53 | improves, but refusal → NO_GO |
 | AgentSentry (strict Auth) | 4 | +66.0 [+60.7, +71.2] (9/0) | −16.3 | −46.3 | +1.53 | improves |
-| Origin guard (ROPE-style) | 4 | +25.9 [+20.2, +32.1] (9/0) | −33.3 | +11.0 | +1.53 | improves, but refusal + cost → NO_GO |
+| Origin guard (ROPE-style) | 4 | +25.9 [+20.2, +32.1] (9/0) | −33.3 | +11.0 | +1.53 | improves, but refusal + cost + cost (1 planner) → NO_GO |
 
 The full table, covering every strong baseline at both budgets and a
 leave-one-task-out range, is in results §4.
@@ -115,9 +117,14 @@ in cost: AgentSentry + verify prompt makes 22.0 LLM calls per case against EP's 
 
 Two caveats limit what this shows:
 
-* **The Fides transplant is EP's resolver by construction** (audit FID-4), so its parity
-  is by design. The CaMeL transplants are a real test: only the policy predicate
-  changes, and CaMeL's plan, halting and readers logic stay as they are.
+* **Three of the five transplants reach parity by construction.** The Fides, AgentSentry
+  and firewall transplants resolve facts with EP's resolver, the latter two at perfect
+  adherence to a "verify prompt" that is not actually modeled as a prompt (audit FID-4,
+  AS-2). Only the CaMeL transplants are a partial test. The policy predicate changes,
+  and the policy-aware plan therefore also verifies document values for authority facts
+  (it now uses the shared resolver policy). Halting and readers logic stay as they are.
+  What the transplants test is that each framework's own policy layer *admits* the
+  endorsed value. Whether a real prompted agent would follow the rule is untested.
 * **Under verification omission (ω > 0) the scope of the rule matters** (results §9).
   Requiring evidence for *every* FACT value, including the user's own store, keeps CUA
   at 0 (EP). Requiring it only for authority arguments or document values lets stale
@@ -156,13 +163,13 @@ EP v0's higher utility at k = 2 (83.3% vs 82.1%) was bought with unsafe commits.
 
 | sweep | EP | notable baselines |
 |---|---|---|
-| **Budget k** (§6) | Utility 0% at k=0, 60% at k=1, 82% at k=2, 91% at k=3, 93% at k≥4. CUA 0 at every k. | CaMeL strong plateaus at 83%, Fides strong at 81%. Fides strong has 42% CUA at k = 0; it falls back to the U claim when it cannot verify. |
+| **Budget k** (§6) | Utility 0% at k=0, 60% at k=1, 82% at k=2, 91% at k=3, 93% at k≥4. CUA 0 at every k. | CaMeL strong plateaus at 83%, Fides strong at 81%. Fides strong has 42% CUA at k = 0: when it cannot verify it binds the user's (possibly stale) store value (198 stale commits), or the U claim where no store value exists (21 false-fact commits). |
 | **φ**, actor compliance (§7) | Not applicable (EP has no reactive actor); CUA 0, utility 93%. | No defense: A-family CUA 7% → 100% as φ goes 0.1 → 1. |
 | **ρ**, reader/purifier hijack (§8) | Utility 95% → 93%; CUA 0. | AgentSentry and Firewall: A-family CUA 0% → 25%. CaMeL/Fides as evaluated: up to 19%. |
 | **ω**, verification omission (§9) | CUA stays 0 because the monitor rejects unverified values. Utility 93% → 39% and safe failure 15% → 66% at ω = 0.5. **This is a refusal trade-off.** | AgentSentry + verify prompt: 31% CUA at ω = 0.5. CaMeL + endorsement (all fact args): 3% CUA. |
 | **Instruction/fact confusion** (§10) | CUA 0 throughout. C utility 84% → 79% when request-phrased facts are dropped. | AgentSentry and Firewall: A-family CUA 25% → 50% when directives are read as claims. |
 | **AgentSentry detection** (§11) | – | A-family CUA 25% → 47% as `p_fact_suggest` goes 0 → 1. |
-| **Judge accept rate q** (§12) | – | Without evidence, B utility is 0% at every q, and B CUA rises from 62% to 100% as C utility rises from 36% to 52%. The B/C trade-off is a line. |
+| **Judge accept rate q** (§12) | – | Without evidence, B utility is 0% at every q. Raising q from 0 to 1 raises C utility from 36% to 52% only by raising B CUA from 62% to 100%. |
 | **Verification order** (§13) | Store-first: B 98% / C 63% at k = 2, 0% CUA. Challengers-first: B 57% / C 80%, 1% CUA (the same-name mule). | – |
 
 ## 7. Assumption violations (§14; outside the guarantee)
@@ -174,8 +181,12 @@ EP v0's higher utility at k = 2 (83.3% vs 82.1%) was bought with unsafe commits.
 | **Reference outage** (486 cases) | 0% utility, 0% CUA | Origin guard: 67% utility, 31% CUA |
 | **Same-principal compromise** (18 cases) | 100% CUA | Every design: 0% utility; CaMeL strong 83% CUA |
 
-EP is exactly as good as its references, and it fails *worse* than an undefended agent
-when a reference is stale or poisoned. Every verify-first design fails in the same way.
+EP is exactly as good as its references. It fails worse than an undefended agent when a
+reference is stale (97% vs 47% CUA; every verify-first design is at 87–97%). It is no
+better than an undefended agent when a reference is poisoned (100% CUA for both); CaMeL
+strong, Fides and Reference-only commit less often there (50–83%), because in some
+slots they never bind a document value and abstain when the poisoned reference refutes
+the user's record.
 
 ## 8. Cost
 

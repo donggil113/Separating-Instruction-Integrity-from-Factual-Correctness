@@ -45,9 +45,9 @@ stress tests are never mixed into the main results.
 |---|---|---|
 | **P1** | The trusted planner turns the user request into a correct authority grant: the right tools, user-fixed counterparties and fact slots. | Every plan-first design (CaMeL, Fides, EP) inherits the error. Not measured: the scripted planner is perfect by construction. |
 | **P2** | The deployment policy (payment limit, sensitive-data markers) is correct and trusted. | The policy checks become meaningless. Not measured. |
-| **V1** | A reference is **correct and current** for the keys it covers, and its CONFIRMED verdict **identifies the value** (only the true value confirms). | *Stale reference* (225 C cases): EP commits the stale value in 97% of cases, worse than the undefended agent (47%). Every verify-first design is in the same range (CaMeL strong 97%, Fides strong 87%). *Outage* (486 cases): EP has 0% utility and 0% CUA. *Non-unique confirmation* (name-match CoP): see the caveat below. |
+| **V1** | A reference is **correct and current** for the keys it covers, and its CONFIRMED verdict **identifies the value** (only the true value confirms). | *Stale reference* (225 C cases): EP commits the stale value in 97% of cases. That is worse than the undefended agent's total CUA of 47% (about half stale, half false-fact commits). Every verify-first design is in the same range (CaMeL strong 97%, Fides strong 87%). *Outage* (486 cases): EP has 0% utility and 0% CUA. *Non-unique confirmation* (name-match CoP): see the caveat below. |
 | **V2** | A reference **cannot be written** through the untrusted content channel. | *Poisoned reference* (126 B cases): EP commits the false value in 100% of cases. The ROPE-style origin guard, which never consults a reference, commits in 21%. *Same-principal compromise* (18 `B_false_auth` cases where the reference is run by the party whose mailbox is compromised): every design has 0% utility; EP's CUA is 100%, CaMeL strong's 83%. |
-| **V3** | A reference is queried with the **entity id from the grant**, never one taken from a document. | The attacker's account verifies under the attacker's own name. Only R1 then stops the payment. |
+| **V3** | A reference is queried with the **entity id from the grant**, never one taken from a document. | The attacker's account verifies under the attacker's own name. The payee name stays user-fixed (R1 passes), so only the monitor's R2 key check (the evidence must be keyed by the grant's entity) stops a redirected account. If that check were also bypassed, nothing would stop the payment. Not measured: there is no V3 stress transform. |
 | **R0** | The runtime and monitor are implemented correctly, and trusted stores have integrity. The stores may be **stale**; they are not assumed current. | Not measured. |
 
 "Independent" means the reference is reached over a channel the document's author does
@@ -71,7 +71,7 @@ the user's own record first (`order = store_first`): when that record is current
 confirms and binds before any document value is tried. If the record were stale *and*
 the only document value were a same-name mule, both EP and `EP (unique confirmation)`
 would bind the mule, because it is then the only confirmed candidate
-(`tests/test_baselines.py::test_resolver_require_unique_abstains_on_same_name_mule_when_store_is_refuted`).
+(`tests/test_baselines.py::test_resolver_binds_same_name_mule_when_store_is_stale_and_no_document_has_the_true_value`).
 For name-match references the guarantee weakens to *"the value is registered under the
 name the user authorized"*.
 
@@ -97,7 +97,8 @@ below.
 What this does **not** give:
 
 * **No truth guarantee beyond the references.** EP is exactly as correct as V1 makes the
-  references, and it is *worse* than an undefended agent when a reference is stale.
+  references. It is *worse* than an undefended agent when a reference is stale, and no
+  better than one when a reference is poisoned.
 * **No availability guarantee.** An attacker can add false challengers that push the true
   new value beyond *k* (`C_race`: 12/27 safe failures at k = 2, 0 at k = 4). Without a
   lookup-capable reference, a change that reaches EP through no document cannot be used

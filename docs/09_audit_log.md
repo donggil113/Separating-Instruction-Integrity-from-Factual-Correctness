@@ -42,7 +42,7 @@ every finding, the verifier's status, and what was done.
 | CAMEL-5 | minor | P | CaMeL's cost equals EP's by construction and is below the undefended agent's, contradicting the paper. | Disclosed. The NO_GO cost flag uses verification + LLM calls under both accountings. |
 | CAMEL-6 / F4 | minor | C | The endorsement transplant covered authority arguments only, so the ω-sweep gap to EP reflected policy scope, not framework. | Row added: `CaMeL + endorsement (all fact args)`. The ω section's title states the scope difference. Endorsement is bound to the argument value. |
 | CAMEL-7 | minor | P | The Q-LLM was immune to redirect-phrased injections even at ρ = 1. | `directive_as_claim` knob, applied to every reader and purifier (results §10). |
-| CAMEL-8 | nit | C | The halt path was never exercised, and it would have logged unreached calls as blocked attempts. | Unreached calls are recorded as abstentions. Test added. |
+| CAMEL-8 | nit | C | The halt path was never exercised, and it would have logged unreached calls as blocked attempts. | Unreached calls are recorded as abstentions. A test with a denial on the first of two templates exercises the halt path (added in the second pass, below). |
 | CAMEL-9 | nit | P | The "as evaluated" label differs from the paper's protocol (policy-free utility). | Disclosed in `05_baselines.md`. |
 | CAMEL-10 | nit | C | No tests pinned CaMeL's policy semantics. | `tests/test_baselines.py`. |
 
@@ -114,3 +114,26 @@ every finding, the verifier's status, and what was done.
 
 The pre-audit headline ("0% CUA with 97% utility") was an artifact of the original
 suite. On that suite, EP v0 never met a stale store that was not also contested.
+
+## Second pass: claims audit of the documentation
+
+After the docs were rewritten, five independent reviewers checked every factual and
+numeric claim in `docs/` and `README.md` against `results/RESULTS.md`, the code and the
+tests. They reported 61 problems. All were corrected, most of them in wording. The
+substantive ones:
+
+| problem | fix |
+|---|---|
+| The R2 basis test never reached the R2 check: its calls had no template index, and its "wrong reference" returned UNKNOWN, not CONFIRMED. | `test_R2_monitor_rejects_provenance_or_unverified_basis` now builds an otherwise admissible call, with a positive control and a CONFIRMED record from a non-configured reference. |
+| No test covered the monitor's tool, user-fixed-argument or `max_calls` branches. | `test_R1_monitor_rejects_template_mismatch_and_extra_calls`. |
+| The CaMeL halt path was still never exercised (CAMEL-8). | The halt test now includes a denial on the first of two templates. |
+| The same-name-mule test's name said "abstains" while asserting a bind, and plain EP was not tested. | Renamed; asserts that both EP and EP (unique confirmation) bind the mule when the store is stale. |
+| The seed-invariance test covered EP only; Allowlist + judge outcomes do vary with the seed. | The test covers every design except Allowlist + judge, at k = 2 and 4; the docs state the exception. |
+| `scripts/run_llm_reader.py` named two transplants that no longer exist and would have skipped them silently. | Names updated; unknown names now abort. |
+| The docs called EP "worse than no defense" under a poisoned reference. | They tie (100% CUA). Only the stale-reference case is worse. |
+| "Not significant" against CaMeL (strong plan) at k = 4 depends on the bootstrap seed. | The lower bound is above 0 for 92 of 200 seeds. Reported as borderline and cost-flagged. |
+| The "cost (1 planner)" flag was presented as pre-registered. | It was added after the audit, and the only flag on the k = 4 Fides verdicts. The docs say so. |
+| The transplants' parity was presented as evidence for the rule without saying that three of them use EP's resolver by construction. | Stated in `07_results.md` §4 and `08_go_no_go.md` §3. |
+| The ω-sweep divergence of the transplants was hidden by "no transplant differs". | Stated: at ω > 0 every transplant differs, and EP's lower CUA costs more safe failures. |
+| Other corrections. | Several baseline descriptions (resolver use, the Fides arg-level fallback, the firewall minimizer, the permissive ROPE reading), variant details (B_condition, stores in C, the same-principal subset) and literature attributions (SARA/APPA, ROPE T3, Influence Is Not Authority). |
+

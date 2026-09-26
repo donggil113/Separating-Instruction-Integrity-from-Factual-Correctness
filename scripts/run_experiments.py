@@ -323,7 +323,7 @@ def main():
 
     judge = {q: run_all(cases, [AllowlistJudge(q, name="Allowlist + judge")], k=K_SUFF) for q in (0.0, 0.25, 0.5, 0.75, 1.0)}
     sweep(judge, "q", ["Allowlist + judge"], lines,
-          "12. Without evidence the B/C trade-off is a line: allowlist + judge accepting new values with probability q "
+          "12. Without evidence B and C move together: allowlist + judge accepting new values with probability q "
           "(k = 4)", ("util_B", "util_C", "cua_B", "cua_C"))
 
     lines.append("\n## 13. Verification order (one setting shared by every verifying design): EP at k = 2 / k = 4\n")

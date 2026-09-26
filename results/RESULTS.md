@@ -669,7 +669,7 @@ EP *improves* on X only if a CI excludes 0 in EP's favour for utility or CUA and
 | AgentSentry | 46% | 45% | 43% | 41% |
 | AgentSentry (strict Auth) | 27% | 25% | 24% | 22% |
 
-## 12. Without evidence the B/C trade-off is a line: allowlist + judge accepting new values with probability q (k = 4)
+## 12. Without evidence B and C move together: allowlist + judge accepting new values with probability q (k = 4)
 
 
 **util_B**
@@ -744,4 +744,4 @@ EP *improves* on X only if a CI excludes 0 in EP's favour for utility or CUA and
 | V1_reference_outage | EP v0 (pre-audit) | 486 | 17% | 9% | 0 | 48 |
 | V1_reference_outage | EP (ours) | 486 | 0% | 0% | 0 | 0 |
 
-_Runtime: 27.3s._
+_Runtime: 27.5s._

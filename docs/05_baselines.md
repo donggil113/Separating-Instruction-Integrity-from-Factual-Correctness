@@ -4,14 +4,22 @@ No LLM is used, so every baseline is a *scripted emulation* of the published des
 structure (sources: `01_related_work.md`, `01b_prior_art_sweep.md`).
 
 * **Structural parts** follow the paper and code closely.
-* **Model-dependent parts** are knobs (φ, ρ, ω, `keep_imperative_facts`,
-  `directive_as_claim`, `p_fact_suggest`, q). Each is set to the value most favorable to
-  the baseline unless stated otherwise, and each is swept.
-* **Unspecified parts.** Where a paper leaves a component unspecified, both plausible
-  readings are run (e.g. AgentSentry's Auth gate).
+* **Model-dependent parts** are knobs. In the main tables:
+  * ω, `keep_imperative_facts`, `directive_as_claim` and `p_fact_suggest` are set to the
+    value most favorable to the baseline;
+  * φ and ρ are set to their worst case (1), which is unfavorable to the reactive and
+    detection-based baselines they affect;
+  * q = 0.5.
 
-After the audit (`09_audit_log.md`), every existing defense is also run with the
-**strongest plan its own rules allow** given the shared references. The CaMeL and Fides
+  All knobs are swept (results §7–§12). Some model-dependent behavior is fixed, not a
+  knob: the reactive actor's credulity and its instruction/fact separation, and
+  AgentSentry's severity scoring.
+* **Unspecified parts.** Where a paper leaves a component unspecified, it is set to its
+  most favorable plausible behavior. Where two readings trade safety against utility
+  (AgentSentry's Auth gate), both are run.
+
+After the audit (`09_audit_log.md`), CaMeL and Fides are also run with the **strongest
+plan their own rules allow** given the shared references. The CaMeL and Fides
 "strong plans" were rebuilt for this (audit CAMEL-1, FID-1).
 
 ## Equal-information contract (requirement 6)
@@ -26,10 +34,14 @@ Every design receives:
 * **the same model stand-ins**: the same scripted reader (quarantined extraction), actor,
   purifier knobs and random draws per base instance.
 
-Every design that verifies uses the shared resolver
-`defenses/base.py::resolve` under an explicit `ResolvePolicy` (`03_schema.md`). No
-design wins by a cleverer search. The candidate order is one setting shared by all of
-them (store first by default); results §13 reports the other order.
+EP, its ablations, CaMeL (strong plan) and the transplants use the shared resolver
+`defenses/base.py::resolve` under an explicit `ResolvePolicy` (`03_schema.md`), so none
+of them wins by a cleverer search. The candidate order is one setting shared by all of
+them (store first by default); results §13 reports EP under the other order. Two
+verifying designs keep their own logic:
+
+* Fides (strong plan / arg-level P-T) implements Fides' own store-first plan;
+* the Verify-only guard checks proposed arguments directly.
 
 No design sees ground truth, the variant label or the world object. The isolation tests
 forbid defense modules from importing `epad.cases.*` or `epad.eval.*`
@@ -61,10 +73,10 @@ These are the baselines the pre-registered NO_GO rule compares against.
 | CaMeL (strong plan), faithful readers | As above, plus CaMeL's readers checks and the engine's non-public-context rule. A branch on document-derived data is denied, and data from private web/file content cannot flow to a recipient (audit CAMEL-2). |
 | CaMeL (strong plan), TARGET-only authority | As above (charitable readers), but only TARGET arguments are authority arguments. Treating ITEM as authority has no direct precedent in CaMeL's code (audit CAMEL-3). |
 | **Fides (strong plan)** | Store-first legal plan (audit FID-1). Lookup where supported, which is T when keyed by the trusted id. Otherwise it verifies the T store value with T arguments: CONFIRMED binds the store value; REFUTED passes the newest `query_llm` variable by reference, unverified, as P-T on the context allows; budget exhaustion or UNKNOWN keeps the store value. |
-| Fides (arg-level P-T) | The stricter policy of §4.3 / §6.1: critical arguments (TARGET, ITEM, QUANTITY) must be T (a lookup or a confirmed store value). UNKNOWN is treated like budget exhaustion (audit FID-5). |
+| Fides (arg-level P-T) | The stricter policy of §4.3 / §6.1: critical arguments (TARGET, ITEM, QUANTITY) must be T: a lookup, or a trusted-store value. The store value is confirmed when the budget allows; it binds unconfirmed when the budget is exhausted or the reference answers UNKNOWN (audit FID-5 made UNKNOWN behave like budget exhaustion). |
 | AgentSentry | arXiv 2602.22724v1 §3–4, App. B–C; no official code. It runs four dry-run regimes plus Purify at every tool-return boundary (documents, store reads, each verifier return). Takeover is flagged iff the instruction effect IE ≥ 1; on takeover the context is purified (directives and payloads removed, facts kept) and revised. The Auth gate is **lenient**: tool and user-fixed arguments of the grant. |
 | AgentSentry (strict Auth) | As above, but Auth also requires fact arguments to equal the user's trusted state where it exists (audit AS-1). The paper leaves Auth unspecified; both readings are reported. |
-| Firewall (sanitizer+minimizer) | arXiv 2510.05244: every tool output is rewritten to remove instructions (a perfect sanitizer, subject to the same ρ and confusion knobs as every reader); secrets are stripped from tool inputs. |
+| Firewall (sanitizer+minimizer) | arXiv 2510.05244: every tool output is rewritten to remove instructions (a perfect sanitizer, subject to the same ρ and confusion knobs as every reader). The tool-input minimizer is charged one LLM call per call but is not modeled as changing arguments; the sanitizer already removes every exfiltration directive. |
 | Origin guard (ROPE-style) | arXiv 2608.27496: a state-changing parameter takes a value only from the user's records, or from an authenticated sender that the user's records name for that counterparty (`trusted_senders`). No truth check. Faithful ROPE fails closed on document-only values. A "ROPE + reference as T3" variant would be an N4-authored strengthening and is not run. |
 | Allowlist + judge (q = 0.5) | Agent-Sentry (Sequeira et al., arXiv 2603.22868): the call must match the task's action structure; sensitive (TARGET/ITEM) values must be on an allowlist from the user's records; otherwise an LLM judge accepts with probability q. Without evidence the judge cannot tell B from C, so q is the same for both (swept in §12). |
 | Tool filter | AgentDojo §4.3: tools restricted to the grant's tools before any data is read (ideal tool selection). |
@@ -141,6 +153,10 @@ case for case, the gain belongs to the rule, not to a new mechanism.
   knobs.
 * *Trusted senders.* The origin guard's list of trusted senders comes from the user's
   records, per task.
+* *Permissive ROPE reading.* The origin guard admits body values from an authenticated
+  sender on that list. Faithful ROPE probably anchors only the sender address and fails
+  closed on a bill's IBAN. The emulation therefore pays document-supplied values from
+  such senders, including the attacker's IBAN in `D_tampered` (results §5).
 
 **Cost accounting**
 

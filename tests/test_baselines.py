@@ -52,6 +52,14 @@ def test_camel_halt_records_unreached_calls_as_escalations_not_attempts():
     r = run_case(CaMeL("strong"), c, 2)
     assert r.blocked_attempts == 0 and r.success
 
+    class DenyFirst(CaMeL):                         # a policy denial on the first of two templates
+        def policy(self, spec, rt, act):
+            return "denied for the test" if act.template == 0 else None
+
+    r = run_case(DenyFirst("strong"), c, 2)
+    assert r.blocked_attempts == 1 and r.n_committed == 0   # the second call is never proposed
+    assert r.outcome == "REFUSED" and r.escalated and not r.cua
+
 
 # ------------------------------------------------------------------ Fides
 def test_fides_eval_commits_false_fact_arg_fides_arg_refuses():
@@ -106,13 +114,16 @@ def test_ep_monitor_rechecks_condition_and_template():
     assert ep.monitor(c.spec, rt, replace(act, template=None), facts).startswith("R1")
 
 
-def test_resolver_require_unique_abstains_on_same_name_mule_when_store_is_refuted():
+def test_resolver_binds_same_name_mule_when_store_is_stale_and_no_document_has_the_true_value():
+    """The V1 uniqueness caveat (docs/02): with a name-match reference, a stale user record and a same-name
+    mule as the only document value, both EP and EP (unique confirmation) bind the mule."""
     c = case("salary", "B_same_name_mule")
-    rt = Runtime(c.world.clone(), 8)
     k = BASE_TASKS["salary"](0).change_key
     mule = c.gt.false_values[k][0]
     claims = [Claim("d:1", k, mule, "d", Trust.UNTRUSTED, True, 120)]
-    r = resolve(c.spec, rt, k, claims, "SBX00 0000 0000 0000", replace(EP_POLICY, require_unique=True))
-    assert r is not None and r.value == mule      # store refuted, only the mule confirms -> (name-match) risk
+    stale = "SBX00 0000 0000 0000"
+    for pol in (EP_POLICY, replace(EP_POLICY, require_unique=True)):
+        r = resolve(c.spec, Runtime(c.world.clone(), 8), k, claims, stale, pol)
+        assert r is not None and r.value == mule     # store refuted, only the mule confirms -> name-match risk
     r2 = resolve(c.spec, Runtime(c.world.clone(), 8), k, claims, c.gt.true_facts[k], EP_POLICY)
-    assert r2.value == c.gt.true_facts[k]         # store-first: the true record confirms first
+    assert r2.value == c.gt.true_facts[k]         # store-first with a current record: the true record binds
